@@ -36688,14 +36688,14 @@ Object.assign(window,{transcribeAttachment,AUDIO_EXT,WHISPER_OK,needConvert,tran
    · 정확도 우선(asr)  — Alibaba는 받아쓰기만(qwen-audio-3.1, 용어 힌트=핫워드). 문장이 끝나면 앱이 Claude로
                          앞 문장들을 곁들여 번역한다. 자막이 1~2초 늦지만 완성된 문장을 보고 번역하므로 정확하다
    · 속도 우선(live)   — Qwen LiveTranslate 동시통역. 말하는 도중에 번역이 나온다
-   같은 마이크 소리를 녹음해 두었다가(15분마다 조각) 끝나면 기록에 붙인다 → 번역·전사에서 정본을 만든다
+   같은 마이크 소리를 녹음해 두었다가(15분마다 조각) 끝나면 기록에 붙인다 → 녹취록에서 「정리하기」로 정확한 기록을 만든다
    한 연결은 Supabase에서 약 150초에 끊기므로 LIVE_ROTATE_MS 마다 새 연결을 먼저 열고 넘겨준 뒤
    옛 연결에는 session.finish를 보내 마지막 문장까지 받고 닫는다. */
 const LIVE_RATE=16000;
 const LIVE_CHUNK=1600;               /* 0.1초 */
 const LIVE_ROTATE_MS=120*1000;       /* 무료 플랜 150초 한도보다 여유 있게 */
 const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
-const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 자막 3~5초'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'}];
+const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 문장이 끝나면 자막'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'}];
 const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate (최신)'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'},{id:'qwen3-livetranslate-flash-realtime',label:'Qwen3 LiveTranslate'}];
 const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기 (최신)'},{id:'qwen-audio-3.0-asr-flash-streaming',label:'Qwen-Audio 3.0 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
 const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
@@ -36714,7 +36714,11 @@ const liveMerge=(have,got)=>!got?have:(!have||got.startsWith(have))?got:have+got
 /* 연결 하나 = 세그먼트 목록 하나. 원문과 번역은 각자 순서대로 채운다 */
 class LiveConn{
   constructor(sess,n){this.sess=sess;this.n=n;this.segs=[];this.si=0;this.ti=0;this.ready=false;this.finishing=false;this.gone=false;}
-  seg(i){while(this.segs.length<=i)this.segs.push({zh:'',zhS:'',ko:'',koS:'',zhDone:false,koDone:false});return this.segs[i];}
+  seg(i){while(this.segs.length<=i)this.segs.push({zh:'',zhS:'',ko:'',koS:'',zhDone:false,koDone:false});
+    const g=this.segs[i];
+    /* 녹음과 맞춰 보기용 — 이 문장이 들리기 시작한 때(첫 글자가 온 때에서 받아쓰기 지연만큼 앞당김, 초) */
+    if(g.t==null&&this.sess.t0)g.t=Math.max(0,(Date.now()-this.sess.t0)/1000-2);
+    return g;}
   async open(){
     const s=this.sess,o=s.opt;
     const {data}=await Store.sb.auth.getSession();
@@ -36725,6 +36729,7 @@ class LiveConn{
     if(o.host)q.set('host',o.host);
     if(asr){const hot=String(Store.cfg.sttHint||'').trim();if(hot)q.set('hot',hot.slice(0,1200));}
     else{const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);}
+    if(Store.cfg.liveSil)q.set('sil',String(Store.cfg.liveSil));   /* 문장을 끊는 침묵 길이(ms) */
     if(Store.cfg.supabaseKey)q.set('apikey',Store.cfg.supabaseKey);
     const url=String(Store.cfg.supabaseUrl||'').replace(/\/+$/,'').replace(/^http/i,'ws')+'/functions/v1/livetranslate?'+q;
     const ws=new WebSocket(url);this.ws=ws;
@@ -36750,12 +36755,17 @@ class LiveConn{
     if(t==='error'){s.fail((ev.error&&(ev.error.message||ev.error.code))||'통역 서버 오류');return;}
     if(t==='session.finished'){this.close();return;}
     if(/^(conversation\.item\.input_audio_transcription|response\.text)/.test(t)&&s.err&&this.ready)s.err='';
+    /* qwen3.8: 원문·번역이 조각(delta)으로 온다 */
+    if(t==='conversation.item.input_audio_transcription.delta'){const g=this.seg(this.si);g.zh+=ev.delta||'';s.bump();return;}
     if(t==='conversation.item.input_audio_transcription.text'){const g=this.seg(this.si);g.zh=liveMerge(g.zh,ev.text||'');g.zhS=ev.stash||'';s.bump();return;}
     if(t==='conversation.item.input_audio_transcription.completed'){const g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;this.si++;
       if(s.opt.mode==='asr'){if(g.zh.trim())s.translate(g);else g.koDone=true;}
       s.bump();return;}
     if(s.opt.mode==='asr')return;
-    if(t==='response.text.text'||t==='response.audio_transcript.text'||t==='response.text.delta'){const g=this.seg(this.ti);g.ko=liveMerge(g.ko,ev.text||ev.delta||'');g.koS=ev.stash||'';s.bump();return;}
+    if(/^response\.text\./.test(t))this.textOut=true;
+    if(/^response\.audio_transcript\./.test(t)&&this.textOut)return;   /* 글·음성 둘 다 오면 글만 쓴다 */
+    if(t==='response.text.delta'||t==='response.audio_transcript.delta'){const g=this.seg(this.ti);g.ko+=ev.delta||'';g.koS='';s.bump();return;}
+    if(t==='response.text.text'||t==='response.audio_transcript.text'){const g=this.seg(this.ti);g.ko=liveMerge(g.ko,ev.text||ev.delta||'');g.koS=ev.stash||'';s.bump();return;}
     if(t==='response.text.done'||t==='response.audio_transcript.done'){const g=this.seg(this.ti);g.ko=ev.text||ev.transcript||g.ko;g.koS='';g.koDone=true;this.ti++;s.bump();return;}
   }
 }
@@ -36931,8 +36941,8 @@ function LiveView({db,setDb,toast,onOpenNote}){
     const hasText=s.segs.some(g=>(g.zh||g.ko).trim());
     setSaving('녹음 정리 중…');await s.recFinished();
     if(!hasText&&!s.recParts.length){setSaving('');return;}
-    /* 번역이 아직 돌고 있으면 잠깐 기다린다(최대 8초) */
-    for(let i=0;i<16&&s.segs.some(g=>g.zhDone&&!g.koDone);i++)await new Promise(r=>setTimeout(r,500));
+    /* 번역이 아직 돌고 있으면 잠깐 기다린다(최대 8초) — 속도 우선은 서버가 마지막 문장을 보내고 닫을 때까지 */
+    for(let i=0;i<16&&(s.segs.some(g=>g.zhDone&&!g.koDone)||(s.opt.mode!=='asr'&&s.conns.some(c=>!c.gone)));i++)await new Promise(r=>setTimeout(r,500));
     const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
     const title='통역 '+stamp;const links=[];
     for(let i=0;i<s.recParts.length;i++){
@@ -36943,6 +36953,9 @@ function LiveView({db,setDb,toast,onOpenNote}){
       catch(e){s.log('녹음 올리기 실패: '+e.message);toast('⚠ 녹음 올리기 실패 — '+e.message);}
     }
     const nn=newNote(title,'work',s.toMarkdown(title,links),['통역']);
+    /* 녹음과 자막 맞춰 보기용 — 녹음 조각이 시작한 때와 문장마다 시작 시각(초) */
+    nn.live={parts:s.recParts.map(p=>Math.max(0,Math.round((p.t0-s.t0)/100)/10)),
+      segs:s.segs.filter(g=>(g.zh||g.ko).trim()).map(g=>({t:Math.round((g.t||0)*10)/10,ko:(g.ko||'').trim(),zh:(g.zh||g.zhS||'').trim()}))};
     setDb('notes',arr=>[...arr,nn]);LIVE.saved={id:nn.id,audio:links.length};setSaving('');force();
     toast('통역 기록을 저장했습니다'+(links.length?' · 녹음 '+links.length+'개 포함':''));
   };
@@ -36976,12 +36989,12 @@ function LiveView({db,setDb,toast,onOpenNote}){
     </div>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6,display:'flex',flexWrap:'wrap',gap:'4px 12px',alignItems:'center'}}>
       <span>{modeDesc}</span>
-      <label style={{cursor:'pointer'}}><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음도 저장 (나중에 정본 만들기)</label>
+      <label style={{cursor:'pointer'}}><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
       <label style={{cursor:'pointer'}} title="휴대폰·스피커 소리를 노트북 마이크로 받을 때는 끄세요(켜면 재생 소리를 지워버립니다)"><input type="checkbox" disabled={running} checked={opt.clean} onChange={e=>set({clean:e.target.checked})}/> 잡음·에코 억제</label>
       <button type="button" onClick={()=>setAdv(!adv)} style={{border:'none',background:'none',color:'var(--text-link, #2563eb)',cursor:'pointer',fontSize:'inherit',padding:0}}>{adv?'▾':'▸'} 고급</button>
     </div>
     {adv&&<div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:8,fontSize:'var(--fs-sm)'}}>
-      {opt.mode==='asr'
+      {window.TB_LOCK_MODELS?<span style={{color:'var(--text-label)'}}>모델은 관리자가 정합니다</span>:opt.mode==='asr'
         ?<><select style={sel} disabled={running} value={opt.asrModel} onChange={e=>set({asrModel:e.target.value})}>{LIVE_ASR_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select>
           <select style={sel} disabled={running} value={opt.trModel} onChange={e=>set({trModel:e.target.value})}>{LIVE_TR_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></>
         :<select style={sel} disabled={running} value={opt.model} onChange={e=>set({model:e.target.value})}>{LIVE_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select>}
@@ -36992,7 +37005,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
     {saving&&<InfoBar tone="info">{saving}</InfoBar>}
     {saved&&!running&&<div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-sm2)'}}>
       <span>✓ <b>{saved.title}</b> 저장됨{LIVE.saved.audio?' · 녹음 '+LIVE.saved.audio+'개':''}</span>
-      {LIVE.saved.audio>0&&<Button size="sm" onClick={()=>onOpenNote(saved.id,true)} title="녹음을 처음부터 다시 받아쓰고 정리·번역해 정확한 기록을 만듭니다(번역·전사 화면으로 이동)">🎯 정본 만들기</Button>}
+      {LIVE.saved.audio>0&&<Button size="sm" onClick={()=>onOpenNote(saved.id,true)} title="녹음을 처음부터 다시 받아쓰고 요점·한국어 번역까지 만들어 정확한 기록을 남깁니다(녹취록 화면으로 이동)">✨ 정리하기</Button>}
       <Button variant="gray" size="sm" onClick={()=>onOpenNote(saved.id,false)}>기록 열기</Button>
       <Button variant="ghost" size="sm" onClick={reset}>화면 비우기</Button></div>}
     <div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}}
@@ -37017,7 +37030,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
       {recent.map(n=><div key={n.id} onClick={()=>onOpenNote(n.id,false)} role="button"
         style={{padding:'7px 4px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',fontSize:'var(--fs-sm2)'}}>
         <div style={{fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{n.title}</div>
-        <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)'}}>{/정리·번역/.test(n.md)?'✓ 정본 있음':audioRefs(n.md).length?'🎙 녹음 있음 · 정본 전':'자막만'}</div>
+        <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)'}}>{/정리·번역/.test(n.md)?'✓ 정리됨':audioRefs(n.md).length?'🎙 녹음 있음 · 정리 전':'자막만'}</div>
       </div>)}
     </Card>
   </div>;
@@ -37646,7 +37659,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v8.1';
+const TB_VERSION='v8.3';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -37681,6 +37694,22 @@ create index if not exists tb_usage_time_idx on tb_usage (created_at);
 alter table tb_usage add column if not exists tok_in integer default 0;
 alter table tb_usage add column if not exists tok_out integer default 0;
 
+-- 팀 공통 설정(모델 등) — 관리자만 바꾸고 팀원은 읽기만. v8.2에서 추가
+create table if not exists tb_config (
+  id integer primary key default 1 check (id = 1),
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz default now(),
+  updated_by text
+);
+alter table tb_config enable row level security;
+drop policy if exists "members read config" on tb_config;
+create policy "members read config" on tb_config for select
+  using (exists (select 1 from tb_members m where lower(m.email) = lower(auth.jwt() ->> 'email')));
+drop policy if exists "owner writes config" on tb_config;
+create policy "owner writes config" on tb_config for all
+  using (exists (select 1 from tb_members m where lower(m.email) = lower(auth.jwt() ->> 'email') and m.role = 'owner'))
+  with check (exists (select 1 from tb_members m where lower(m.email) = lower(auth.jwt() ->> 'email') and m.role = 'owner'));
+
 -- 소유자(관리자) 등록 — 본인 로그인 이메일로 바꿔서 실행
 insert into tb_members (email, role) values ('kongdang2@gmail.com', 'owner')
   on conflict (email) do update set role = 'owner';`;
@@ -37714,6 +37743,16 @@ function tbApplyStt(){
   Store.cfg={...Store.cfg,...(m==='qwen3-asr-flash'?{sttEngine:'paraformer'}:{sttEngine:'openai',sttModel:m})};
   return m;
 }
+
+/* 관리자가 정한 값 → 이 창의 설정 */
+const TB_CFG_KEYS=['liveAsrModel','liveTrModel','liveModel','tbSttModel','claudeModel','liveSil'];
+function tbApplyConfig(d){
+  const pick={};TB_CFG_KEYS.forEach(k=>{if(d&&d[k]!==undefined)pick[k]=d[k];});
+  if(Object.keys(pick).length)Store.saveCfg(pick);
+  tbApplyStt();window.dispatchEvent(new Event('live-cfg'));
+}
+const TB_SIL=[{id:'',label:'모델 기본값'},{id:'400',label:'0.4초 — 가장 빠름 (문장이 잘게 끊김)'},{id:'600',label:'0.6초 — 빠르게'},
+  {id:'800',label:'0.8초 — 보통'},{id:'1200',label:'1.2초 — 느긋하게 (긴 문장을 한 번에)'}];
 
 /* ── 예상 요금 (USD) ──────────────────────────────────────────
    실제 청구서가 아니라 기록된 사용량 × 공개 단가로 낸 추정치다. 단가는 2026-10 기준.
@@ -37784,6 +37823,16 @@ const TB={
     const {data,error}=await Store.sb.from('tb_members').select('role').eq('email',String(Store.user.email||'').toLowerCase()).maybeSingle();
     if(error){if(isMissingTable(error))return 'nosetup';throw new Error(explainSbError(error));}
     return data?data.role:null;
+  },
+  /* 팀 공통 설정 — 관리자가 정한 모델 등. 표가 없으면 null */
+  async getConfig(){
+    const {data,error}=await Store.sb.from('tb_config').select('data').eq('id',1).maybeSingle();
+    if(error){if(isMissingTable(error))return null;throw new Error(explainSbError(error));}
+    return (data&&data.data)||{};
+  },
+  async setConfig(d){
+    const {error}=await Store.sb.from('tb_config').upsert({id:1,data:d,updated_at:new Date().toISOString(),updated_by:Store.user.email});
+    if(error)throw new Error(isMissingTable(error)?'설정 표(tb_config)가 없습니다 — 업데이트 SQL을 먼저 실행하세요':explainSbError(error));
   },
   async log(kind,seconds,calls,model){
     try{await Store.sb.from('tb_usage').insert({user_id:Store.user.id,email:Store.user.email,kind,seconds:Math.round(seconds||0),calls:calls||0,model:model||null});}
@@ -37916,6 +37965,81 @@ function TbLogin({onLogin,note}){
   </div>;
 }
 
+/* ── 녹음 재생 + 자막 맞춰 보기 ───────────────────────────────
+   브라우저 녹음(webm)은 파일에 길이가 적혀 있지 않아 재생 막대가 몇 초 뒤 끝에 붙는다.
+   처음 재생할 때 파일을 통째로 받아 길이를 알아낸 뒤(끝으로 한 번 보냈다가 되돌리기) 재생한다.
+   통역 기록에 문장별 시각(rec.live)이 있으면 지금 들리는 문장을 표시하고, 문장을 누르면 그 위치로 간다. */
+const tbClock=s=>{s=Math.max(0,Math.floor(s||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+':'+pad2(m):m)+':'+pad2(x);};
+function TbAudioSet({refs,live}){
+  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const els=React.useRef([]);const ready=React.useRef({});const made=React.useRef([]);
+  const [busy,setBusy]=React.useState(-1);const [err,setErr]=React.useState('');
+  const [now,setNow]=React.useState(-1);const [open,setOpen]=React.useState(true);
+  const box=React.useRef(null);
+  const segs=(live&&live.segs)||[];
+  const parts=(live&&live.parts&&live.parts.length===refs.length)?live.parts:refs.map((_,i)=>i*LIVE_REC_SPLIT/1000);
+  React.useEffect(()=>()=>{made.current.forEach(u=>URL.revokeObjectURL(u));},[]);
+  /* 처음엔 서명 주소만 걸어 둔다(받지 않음) — 재생을 누르면 prep 이 파일로 바꿔 끼운다 */
+  React.useEffect(()=>{let on=true;refs.forEach((r,i)=>Files.url(r.path).then(u=>{const el=els.current[i];if(on&&el&&!ready.current[i]&&!el.src)el.src=u;}).catch(()=>{}));return()=>{on=false;};},[]);
+  /* i번째 녹음을 재생 가능한 상태로 */
+  const prep=async i=>{
+    if(ready.current[i])return ready.current[i];
+    const el=els.current[i];
+    ready.current[i]=(async()=>{
+      setBusy(i);setErr('');
+      try{
+        const b=await Files.blob(refs[i].path);const u=URL.createObjectURL(b);made.current.push(u);
+        await new Promise((ok,no)=>{el.onloadedmetadata=ok;el.onerror=()=>no(new Error('녹음을 열지 못했습니다'));el.src=u;el.load();});
+        if(!isFinite(el.duration)){   /* 길이 알아내기 */
+          await new Promise(ok=>{const done=()=>{el.removeEventListener('durationchange',chk);ok();};
+            const chk=()=>{if(isFinite(el.duration))done();};el.addEventListener('durationchange',chk);el.currentTime=1e7;setTimeout(done,4000);});
+          el.currentTime=0;
+        }
+      }catch(e){ready.current[i]=null;setErr(e.message);setBusy(-1);throw e;}
+      setBusy(-1);return true;})();
+    return ready.current[i];
+  };
+  const onPlay=async i=>{
+    els.current.forEach((x,k)=>{if(k!==i&&x&&!x.paused)x.pause();});
+    if(ready.current[i]===true)return;
+    const el=els.current[i];if(!ready.current[i]){el.pause();try{await prep(i);ready.current[i]=true;el.play();}catch(_){}}
+  };
+  const seek=async t=>{
+    let i=0;for(let k=0;k<parts.length;k++)if(parts[k]<=t)i=k;
+    try{await prep(i);ready.current[i]=true;}catch(_){return;}
+    const el=els.current[i];el.currentTime=Math.max(0,t-parts[i]-0.5);
+    els.current.forEach((x,k)=>{if(k!==i&&x&&!x.paused)x.pause();});
+    el.play().catch(()=>{});
+  };
+  const act=segs.length&&now>=0?segs.reduce((a,g,k)=>g.t<=now?k:a,-1):-1;
+  React.useEffect(()=>{const el=box.current&&box.current.querySelector('[data-on="1"]');if(el&&open)el.scrollIntoView({block:'nearest',behavior:'smooth'});},[act,open]);
+  const name=r=>((/\[([^\]]*)\]/.exec(r.raw)||[])[1]||'녹음').replace(/^🎙\s*/,'');
+  return <div style={{padding:'8px 12px 0'}}>
+    <div style={{display:'flex',flexDirection:'column',gap:4}}>
+      {refs.map((r,i)=><div key={r.path} style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',minWidth:0}}>🎙 {name(r)}{refs.length>1&&live&&live.parts?' · '+tbClock(parts[i])+'부터':''}</span>
+        <audio ref={x=>els.current[i]=x} controls preload="none" style={{height:32,flex:'1 1 260px',maxWidth:520}}
+          onPlay={()=>onPlay(i)} onTimeUpdate={e=>{if(ready.current[i]===true)setNow(parts[i]+e.currentTarget.currentTime);}}/>
+        {busy===i&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>불러오는 중…</span>}
+      </div>)}
+      {err&&<span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)'}}>⚠ {err}</span>}
+    </div>
+    {segs.length>0&&<div style={{marginTop:8,border:'1px solid var(--border-default)',borderRadius:4}}>
+      <button type="button" onClick={()=>setOpen(!open)} style={{width:'100%',textAlign:'left',border:'none',background:'var(--surface-calc-cell)',padding:'6px 10px',cursor:'pointer',fontSize:'var(--fs-sm2)',fontFamily:'inherit'}}>
+        {open?'▾':'▸'} 🎧 녹음과 함께 보기 · {segs.length}문장 <span style={{color:'var(--text-label)'}}>— 문장을 누르면 그 부분부터 재생</span></button>
+      {open&&<div ref={box} style={{maxHeight:'38vh',overflowY:'auto'}}>
+        {segs.map((g,k)=><div key={k} data-on={k===act?'1':'0'} onClick={()=>seek(g.t)} title="여기서부터 듣기"
+          style={{display:'flex',gap:10,padding:'6px 10px',cursor:'pointer',borderTop:k?'1px dashed var(--border-default)':'none',
+            background:k===act?'#FFF6D6':'transparent',borderLeft:'3px solid '+(k===act?'#E0A100':'transparent')}}>
+          <span style={{fontFamily:'var(--font-num)',fontSize:'var(--fs-sm)',color:'var(--text-label)',minWidth:44,paddingTop:2}}>{tbClock(g.t)}</span>
+          <span style={{minWidth:0}}><div style={{fontSize:'var(--fs-md)',fontWeight:k===act?600:400}}>{g.ko||'…'}</div>
+            <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>{g.zh}</div></span>
+        </div>)}
+      </div>}
+    </div>}
+  </div>;
+}
+
 /* ── 녹취록 ── */
 function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
   const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
@@ -37925,7 +38049,13 @@ function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
   const [q,setQ]=React.useState('');const [confirmDel,setConfirmDel]=React.useState(false);
   const local=React.useRef({});   /* 올리지 않은 큰 파일은 이 창에서만 들고 있다 */
   React.useEffect(()=>{setEdit(false);setConfirmDel(false);},[sel]);
-  React.useEffect(()=>{if(autoStt&&cur&&cur.id===autoStt&&!busy){clearAuto();runStt(cur);}},[autoStt,cur&&cur.id]);
+  React.useEffect(()=>{if(autoStt&&cur&&cur.id===autoStt&&!busy){clearAuto();runTidy(cur);}},[autoStt,cur&&cur.id]);
+  /* 정리하기 = 받아쓴 글이 이미 있으면 정리·번역만, 없으면 녹음 받아쓰기부터(녹음도 없으면 실시간 원문으로 정리) */
+  const runTidy=rec=>{
+    if(tbSection(rec.md,'녹취'))return runPolish(rec);
+    if(audioRefs(rec.md).length||local.current[rec.id])return runStt(rec);
+    return runPolish(rec);
+  };
   const list=recs.filter(r=>!q||(r.title+' '+r.md).toLowerCase().includes(q.toLowerCase()));
 
   /* 받아쓰기 → 정리·번역 */
@@ -38010,8 +38140,8 @@ function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
           style={{...inputStyle,border:'none',borderBottom:'1px dashed var(--border-strong)',borderRadius:0,fontWeight:700,fontSize:16,flex:'1 1 220px',minWidth:0,padding:'4px 2px'}}/>
         <select style={sel_} value={lang} onChange={e=>{setLang(e.target.value);Store.saveCfg({sttLang:e.target.value});}} title="녹음에서 말하는 언어" aria-label="말하는 언어">
           {TB_LANGS.map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
-        <Button size="sm" disabled={!!busy||!hasAudio} onClick={()=>runStt(cur)} title="녹음을 받아쓰고 이어서 정리·번역합니다. 결과는 맨 위에 붙습니다">🎧 전사</Button>
-        <Button variant="secondary" size="sm" disabled={!!busy||!hasRaw} onClick={()=>runPolish(cur)} title="받아쓴 글로 요점·한국어 번역·정리된 원문을 다시 만듭니다">🤖 다시 정리</Button>
+        <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>runTidy(cur)}
+          title={tbSection(cur.md,'녹취')?'받아쓴 글로 요점·한국어 번역·정리된 원문을 다시 만듭니다':'녹음을 처음부터 받아쓰고 이어서 요점·한국어 번역을 만듭니다. 결과는 맨 위에 붙습니다'}>✨ 정리하기</Button>
         <Button variant="secondary" size="sm" disabled={!!busy} onClick={exportDocx} title="이 녹취록을 Word 문서로 내려받습니다">📄 Word</Button>
         <Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setEdit(!edit)}>{edit?'✓ 편집 끝':'✎ 편집'}</Button>
         {confirmDel
@@ -38019,8 +38149,7 @@ function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
           :<Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setConfirmDel(true)}>🗑</Button>}
       </div>
       {busy&&<div style={{padding:'8px 12px'}}><InfoBar>⏳ {busy} — 창을 닫지 마세요</InfoBar></div>}
-      {audioRefs(cur.md).length>0&&<div style={{padding:'8px 12px 0',display:'flex',flexDirection:'column',gap:4}}>
-        {audioRefs(cur.md).map((r,i)=><PmsAudio key={i} src={'pms:'+r.path} label={((/\[([^\]]*)\]/.exec(r.raw)||[])[1]||'녹음').replace(/^🎙\s*/,'')}/>)}</div>}
+      {audioRefs(cur.md).length>0&&<TbAudioSet key={cur.id} refs={audioRefs(cur.md)} live={cur.live}/>}
       {edit
         ?<textarea id="tbEdit" value={cur.md} onChange={e=>upd(cur.id,{md:e.target.value})}
           style={{...inputStyle,border:'none',borderRadius:0,minHeight:mobile?'60vh':'calc(100vh - 330px)',padding:'12px 14px',lineHeight:1.75,fontSize:13.5,resize:'vertical'}}/>
@@ -38043,33 +38172,42 @@ function TbSelect({id,value,options,onChange}){
   return <select id={id} value={value} onChange={e=>onChange(e.target.value)} style={{...inputStyle,width:'100%',maxWidth:440}}>
     {opts.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>;
 }
-function TbModels({toast}){
-  const {Card,Button}=window.HDWorkbookDesignSystem_ad60e4;
+function TbModels({toast,role}){
+  const {Card,Button,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const owner=role==='owner';
   const live=LIVE.sess&&LIVE.sess.running;
-  const [m,setM]=React.useState(()=>({
-    asr:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,tr:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,live:Store.cfg.liveModel||LIVE_MODELS[0].id,
-    stt:Store.cfg.tbSttModel||TB_STT[0].id,polish:Store.cfg.claudeModel||CLAUDE_MODELS[0].id}));
+  const cur=()=>({asr:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,tr:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,live:Store.cfg.liveModel||LIVE_MODELS[0].id,
+    stt:Store.cfg.tbSttModel||TB_STT[0].id,polish:Store.cfg.claudeModel||CLAUDE_MODELS[0].id,sil:String(Store.cfg.liveSil||'')});
+  const [m,setM]=React.useState(cur);const [busy,setBusy]=React.useState(false);const [err,setErr]=React.useState('');
   const set=p=>setM(o=>({...o,...p}));
-  const save=()=>{Store.saveCfg({liveAsrModel:m.asr,liveTrModel:m.tr,liveModel:m.live,tbSttModel:m.stt,claudeModel:m.polish});
-    tbApplyStt();window.dispatchEvent(new Event('live-cfg'));toast('모델을 저장했습니다'+(live?' — 지금 통역은 다음 시작부터 적용':''));};
-  const per=(id,unit)=>{const p=TB_PRICE_SEC[id];if(p)return '시간당 약 '+fmtUsd(p*3600);const t=TB_PRICE_TOK[id];return t?'입력 $'+t[0]+' · 출력 $'+t[1]+' /100만 토큰':'';};
+  const save=async()=>{setBusy(true);setErr('');
+    const d={liveAsrModel:m.asr,liveTrModel:m.tr,liveModel:m.live,tbSttModel:m.stt,claudeModel:m.polish,liveSil:m.sil?Number(m.sil):0};
+    try{await TB.setConfig(d);tbApplyConfig(d);toast('팀 모델 설정을 저장했습니다'+(live?' — 지금 통역은 다음 시작부터 적용':''));}
+    catch(e){setErr(e.message);}
+    setBusy(false);};
+  const per=id=>{const p=TB_PRICE_SEC[id];if(p)return '시간당 약 '+fmtUsd(p*3600);const t=TB_PRICE_TOK[id];return t?'입력 $'+t[0]+' · 출력 $'+t[1]+' /100만 토큰':'';};
+  const lab=(opts,id)=>((opts.find(o=>o.id===id)||{}).label||id||'—');
   const row=(label,key,options,desc)=><div style={{display:'grid',gap:4}}>
     <label htmlFor={'tbm_'+key} style={{fontSize:'var(--fs-sm2)',fontWeight:600}}>{label}</label>
-    <TbSelect id={'tbm_'+key} value={m[key]} options={options} onChange={v=>set({[key]:v})}/>
-    <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{desc} · {per(m[key])}</span></div>;
+    {owner?<TbSelect id={'tbm_'+key} value={m[key]} options={options} onChange={v=>set({[key]:v})}/>
+      :<div style={{fontSize:'var(--fs-md)'}}>{lab(options,m[key])}</div>}
+    <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{desc}{per(m[key])?' · '+per(m[key]):''}</span></div>;
   return <Card title="🧠 모델">
     <div style={{display:'grid',gap:14}}>
-      {row('통역 🎯 정확도 우선 — 받아쓰기','asr',LIVE_ASR_MODELS,'중국어를 글로 받아 적는 모델')}
+      {!owner&&<InfoBar>모델은 관리자가 팀 전체에 정해 둡니다.</InfoBar>}
+      {row('통역 🎯 정확도 우선 — 받아쓰기','asr',LIVE_ASR_MODELS,'말을 글로 받아 적는 모델')}
       {row('통역 🎯 정확도 우선 — 번역','tr',LIVE_TR_MODELS,'받아쓴 문장을 한국어로 옮기는 Claude. 빠를수록 자막이 일찍 뜸')}
+      {row('통역 — 문장 끊는 간격','sil',TB_SIL,'말이 이만큼 멈추면 문장이 끝난 것으로 보고 번역을 시작. 정확도 우선과 속도 우선(Qwen3.5·3)에 적용, Qwen3.8은 모델이 알아서 끊음')}
       {row('통역 ⚡ 속도 우선','live',LIVE_MODELS,'받아쓰기와 번역을 한 번에 하는 동시통역 모델')}
       {row('녹음 파일 전사','stt',TB_STT,'OpenAI는 무료 사용량이 없어 바로 청구됩니다')}
       {row('녹취록 정리·번역','polish',CLAUDE_MODELS,'전사 글을 다듬고 한국어로 정리하는 Claude')}
-      <div><Button size="sm" onClick={save}>저장</Button>
-        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginLeft:8}}>내 브라우저에만 저장됩니다(팀원은 각자 고름)</span></div>
+      {err&&<InfoBar tone="warn">{err}</InfoBar>}
+      {owner&&<div><Button size="sm" disabled={busy} onClick={save}>저장</Button>
+        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginLeft:8}}>팀 전체에 적용됩니다 (팀원은 다음에 앱을 열 때부터)</span></div>}
     </div>
   </Card>;
 }
-function TbSettings({toast}){
+function TbSettings({toast,role}){
   const {Card,Button,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
   const [hint,setHint]=React.useState(Store.cfg.sttHint||'');
   const [usage,setUsage]=React.useState(undefined);
@@ -38078,7 +38216,7 @@ function TbSettings({toast}){
   const noTok=usage&&usage.length&&!('tok_in' in usage[0]);
   const tdS={padding:'6px 10px',borderBottom:'1px solid var(--border-default)',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'};
   return <div style={{display:'grid',gap:14,maxWidth:760}}>
-    <TbModels toast={toast}/>
+    <TbModels toast={toast} role={role}/>
     <Card title="용어 힌트">
       <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginBottom:6,lineHeight:1.6}}>자주 나오는 회사명·제품명·사람 이름·전문용어를 쉼표로 적어 두세요. 통역의 받아쓰기, 번역, 녹취록 정리에 모두 쓰입니다. 이 브라우저에만 저장됩니다.</div>
       <textarea id="tbHint" value={hint} onChange={e=>setHint(e.target.value)} rows={3} placeholder="예: 乙烯, 丙烯, 石脑油, 温山, 대한유화" style={{...inputStyle,lineHeight:1.6}}/>
@@ -38219,7 +38357,7 @@ function TbShell({user,role,onLogout}){
         <div style={{display:tab==='live'?'block':'none'}}>
           <LiveView db={{notes:recs||[]}} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         {tab==='rec'&&<TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/>}
-        {tab==='me'&&<TbSettings toast={toast}/>}
+        {tab==='me'&&<TbSettings toast={toast} role={role}/>}
         {tab==='team'&&role==='owner'&&<TbTeam toast={toast}/>}
       </>}
     </main>
@@ -38235,7 +38373,12 @@ function TbApp(){
   React.useEffect(()=>{
     Store.init().then(u=>{tbApplyStt();setUser(u||null);if(location.hash.includes('access_token'))history.replaceState(null,'',location.pathname);});
   },[]);
-  const checkRole=React.useCallback(async()=>{setRole(undefined);try{setRole(await TB.role());}catch(e){setNote(e.message);setRole(null);}},[]);
+  const checkRole=React.useCallback(async()=>{setRole(undefined);
+    try{const r=await TB.role();
+      if(r==='owner'||r==='member'){window.TB_LOCK_MODELS=r!=='owner';
+        try{const c=await TB.getConfig();if(c)tbApplyConfig(c);}catch(e){console.warn('[통번역] 팀 설정 읽기 실패',e);}}
+      setRole(r);}
+    catch(e){setNote(e.message);setRole(null);}},[]);
   React.useEffect(()=>{if(user)checkRole();},[user]);
   const logout=async()=>{if(LIVE.sess&&LIVE.sess.running)LIVE.sess.stop(true);await Store.signOut();setUser(null);setRole(undefined);};
   if(user===undefined)return <div style={{padding:40,color:'var(--text-label)',fontFamily:'var(--font-sans)'}}>불러오는 중…</div>;
