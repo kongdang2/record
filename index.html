@@ -35974,7 +35974,9 @@ const Store={
 };
 
 /* Claude 호출 — 우선순위: ① Supabase Edge Function(키가 서버에만 있음, 권장) ② 브라우저 직접(설정에 API 키) ③ 프리뷰 호스트(window.claude) */
-const CLAUDE_MODELS=[{id:'claude-sonnet-5',label:'Sonnet 5 · 균형(권장)'},{id:'claude-haiku-4-5-20251001',label:'Haiku 4.5 · 빠르고 저렴'},{id:'claude-opus-5',label:'Opus 5 · 고성능'}];
+const CLAUDE_MODELS=[{id:'claude-sonnet-5-5',label:'Sonnet 5.5 · 균형(권장)'},{id:'claude-opus-5-5',label:'Opus 5.5 · 가장 정확'},{id:'claude-haiku-5-5',label:'Haiku 5.5 · 빠르고 아주 저렴'},{id:'claude-haiku-4-5-20251001',label:'Haiku 4.5 · 예전 모델'}];
+/* 사용 토큰 알림 — 통번역 앱이 요금 계산용으로 받는다(없으면 무시) */
+const claudeUsage=(model,u,tag)=>{try{if(u&&window.__claudeUsage)window.__claudeUsage(model,u,tag);}catch(_){}};
 function claudeMode(){const c=Store.cfg;if(c.claudeVia==='direct'&&c.anthropicKey)return 'direct';if(Store.mode==='supabase'&&c.claudeVia!=='direct')return 'edge';if(c.anthropicKey)return 'direct';if(window.claude&&window.claude.complete)return 'preview';return 'none';}
 function explainClaudeError(e,mode){const m=(e&&e.message)||String(e);
   if(/FunctionsFetchError|Failed to send a request to the Edge Function|Failed to fetch/i.test(m))return 'Edge Function "claude"를 찾지 못했습니다 — 대시보드 Edge Functions에서 이름이 claude로 배포됐는지 확인';
@@ -35992,13 +35994,13 @@ async function askClaude(prompt,opt={}){
     if(mode==='edge'){
       const {data,error}=await Store.sb.functions.invoke('claude',{body:{prompt,model,max_tokens:opt.max_tokens||1500,system:opt.system,images:opt.images||[]}});
       if(error){let detail='';try{const j=await error.context?.json();detail=j&&j.error;}catch(_){}throw new Error(detail||error.message);}
-      if(data&&data.error)throw new Error(data.error);return data.text;}
+      if(data&&data.error)throw new Error(data.error);claudeUsage(data.model||model,data.usage,opt.usageTag);return data.text;}
     if(mode==='direct'){
       const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':Store.cfg.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model,max_tokens:opt.max_tokens||1500,system:opt.system,messages:[{role:'user',content:
         (opt.images&&opt.images.length)
           ? [...opt.images.map(im=>({type:'image',source:{type:'base64',media_type:im.media_type,data:im.data}})),{type:'text',text:prompt}]
           : prompt}]})});
-      const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'요청 실패');return j.content.map(c=>c.text||'').join('');}
+      const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'요청 실패');claudeUsage(model,j.usage,opt.usageTag);return j.content.map(c=>c.text||'').join('');}
     if(mode==='preview')return window.claude.complete((opt.system?opt.system+'\n\n---\n\n':'')+prompt);
     throw new Error(Store.mode==='supabase'?'Claude 연결이 없습니다 — 설정 › Claude 탭 참고':'Supabase를 먼저 연결하거나 설정에 Anthropic API 키를 입력하세요');
   }catch(e){throw new Error(explainClaudeError(e,mode));}
@@ -36694,9 +36696,9 @@ const LIVE_CHUNK=1600;               /* 0.1초 */
 const LIVE_ROTATE_MS=120*1000;       /* 무료 플랜 150초 한도보다 여유 있게 */
 const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
 const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 자막 3~5초'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'}];
-const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'}];
-const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
-const LIVE_TR_MODELS=[{id:'claude-haiku-4-5-20251001',label:'번역 Haiku (빠름)'},{id:'claude-sonnet-5',label:'번역 Sonnet (정확)'}];
+const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate (최신)'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'},{id:'qwen3-livetranslate-flash-realtime',label:'Qwen3 LiveTranslate'}];
+const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기 (최신)'},{id:'qwen-audio-3.0-asr-flash-streaming',label:'Qwen-Audio 3.0 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
+const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
 const LIVE_LANGS=[{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'ko',label:'한국어'}];
 const langLabel=id=>(LIVE_LANGS.find(l=>l.id===id)||{}).label||id;
 
@@ -36832,7 +36834,7 @@ class LiveSession{
       +(hint?'\n\n자주 나오는 용어: '+hint:'');
     const prompt=(prev?'앞선 발화(참고용):\n'+prev+'\n\n':'')+'이번 발화를 번역하라:\n'+g.zh;
     try{
-      const out=await askClaude(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:600});
+      const out=await askClaude(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:600,usageTag:'통역 번역'});
       g.ko=String(out||'').trim().replace(/^["“「]|["”」]$/g,'');g.koS='';
     }catch(e){g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}
     g.koDone=true;this.bump();
@@ -36914,6 +36916,9 @@ function LiveView({db,setDb,toast,onOpenNote}){
   React.useEffect(()=>{const t=running&&setInterval(force,1000);return()=>clearInterval(t);},[running]);
   React.useEffect(()=>{const el=box.current;if(el&&stick.current)el.scrollTop=el.scrollHeight;});
   const set=p=>setOpt(o=>({...o,...p}));
+  /* 설정 화면에서 모델을 바꾸면 따라간다 */
+  React.useEffect(()=>{const f=()=>setOpt(o=>({...o,model:Store.cfg.liveModel||o.model,asrModel:Store.cfg.liveAsrModel||o.asrModel,trModel:Store.cfg.liveTrModel||o.trModel}));
+    window.addEventListener('live-cfg',f);return()=>window.removeEventListener('live-cfg',f);},[]);
   const start=async()=>{
     Store.saveCfg({liveMode:opt.mode,liveModel:opt.model,liveAsrModel:opt.asrModel,liveTrModel:opt.trModel,liveFrom:opt.from,liveHost:opt.host,liveClean:opt.clean,liveRecord:opt.record});
     const s=new LiveSession({...opt},force);LIVE.sess=s;LIVE.saved=null;force();
@@ -37017,7 +37022,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
     </Card>
   </div>;
 }
-Object.assign(window,{LiveView,LiveSession,LiveConn,liveMerge,pcm16b64,LIVE_MODELS,LIVE});
+Object.assign(window,{LiveView,LiveSession,LiveConn,liveMerge,pcm16b64,LIVE_MODELS,LIVE_ASR_MODELS,LIVE_TR_MODELS,LIVE_MODES,LIVE});
 </script>
 <script type="text/babel">/* ── LLM 위키 모드 ────────────────────────────────────────────────
    ① 규칙 노트  — 위키의 문법·정돈 기준. 모든 위키 작업의 system 프롬프트가 된다
@@ -37641,7 +37646,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v8.0';
+const TB_VERSION='v8.1';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -37672,6 +37677,9 @@ create policy "insert own usage" on tb_usage for insert with check (auth.uid() =
 drop policy if exists "read own usage" on tb_usage;
 create policy "read own usage" on tb_usage for select using (auth.uid() = user_id);
 create index if not exists tb_usage_time_idx on tb_usage (created_at);
+-- 요금 계산용 토큰 수(Claude) — v8.1에서 추가
+alter table tb_usage add column if not exists tok_in integer default 0;
+alter table tb_usage add column if not exists tok_out integer default 0;
 
 -- 소유자(관리자) 등록 — 본인 로그인 이메일로 바꿔서 실행
 insert into tb_members (email, role) values ('kongdang2@gmail.com', 'owner')
@@ -37693,6 +37701,62 @@ function tbPutTop(md,head,body){
 const tbSection=(md,head)=>{const m=new RegExp('##\\s*'+head+'[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)').exec(md||'');return m?m[1].trim():'';};
 const fmtMin=s=>{s=Math.round(s||0);if(s<60)return s+'초';const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h?(h+'시간 '+m+'분'):(m+'분');};
 const monthStart=(off=0)=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth()+off,1).toISOString();};
+
+/* ── 모델 고르기 ── */
+const TB_STT=[
+  {id:'qwen3-asr-flash',label:'Alibaba Qwen3-ASR — 중국어에 강함 · 가장 저렴 (기본)'},
+  {id:'gpt-transcribe',label:'OpenAI gpt-transcribe — 영어·한국어에 강함'},
+  {id:'whisper-1',label:'OpenAI whisper-1 — 예전 표준'},
+];
+/* 녹취록 전사 엔진을 이 창의 설정에 반영(저장된 고르기 → Audio.jsx 가 보는 값) */
+function tbApplyStt(){
+  const m=Store.cfg.tbSttModel||TB_STT[0].id;
+  Store.cfg={...Store.cfg,...(m==='qwen3-asr-flash'?{sttEngine:'paraformer'}:{sttEngine:'openai',sttModel:m})};
+  return m;
+}
+
+/* ── 예상 요금 (USD) ──────────────────────────────────────────
+   실제 청구서가 아니라 기록된 사용량 × 공개 단가로 낸 추정치다. 단가는 2026-10 기준.
+   · Alibaba(국제 리전): 무료 사용량이 남아 있는 동안 실제 청구는 0
+   · LiveTranslate·스트리밍 받아쓰기는 토큰 단가를 초당으로 환산한 근사치 */
+const TB_PRICE_DATE='2026-10';
+const TB_USD_KRW=1450;
+const TB_PRICE_SEC={   /* 음성 1초당 */
+  'qwen3-asr-flash':0.000035,
+  'qwen-audio-3.1-asr-flash-streaming':0.00009,'qwen-audio-3.0-asr-flash-streaming':0.00009,'fun-asr-realtime':0.00009,'paraformer-realtime-v2':0.00009,
+  'qwen3.8-livetranslate-flash-realtime':0.00012,'qwen3.5-livetranslate-flash-realtime':0.00012,'qwen3-livetranslate-flash-realtime':0.00012,
+  'gpt-transcribe':0.000075,'whisper-1':0.0001,'gpt-4o-transcribe':0.0001,'gpt-4o-mini-transcribe':0.00005,'gpt-4o-transcribe-diarize':0.0001,
+};
+const TB_PRICE_TOK={   /* 100만 토큰당 [입력, 출력] */
+  'claude-haiku-5-5':[0.1,0.5],'claude-haiku-4-5-20251001':[1,5],
+  'claude-sonnet-5':[2,10],'claude-sonnet-5-5':[2,10],'claude-opus-5':[5,25],'claude-opus-5-5':[4,20],
+};
+const tbCost=r=>{const t=TB_PRICE_TOK[r.model];
+  if(t)return ((r.tok_in||0)*t[0]+(r.tok_out||0)*t[1])/1e6;
+  const p=TB_PRICE_SEC[r.model];return p?(r.seconds||0)*p:0;};
+const fmtUsd=v=>!v?'$0':v<0.01?'<$0.01':'$'+v.toFixed(v<10?2:1);
+const fmtKrw=v=>'≈₩'+Math.round(v*TB_USD_KRW).toLocaleString('ko-KR');
+/* 사용 기록 → 항목별 합계 */
+const TB_GROUPS=[
+  {id:'live_asr',label:'통역 · 정확도 — 받아쓰기',unit:'sec'},
+  {id:'live_tr',label:'통역 · 정확도 — 번역(Claude)',unit:'req'},
+  {id:'live',label:'통역 · 속도',unit:'sec'},
+  {id:'stt',label:'녹음 전사',unit:'sec'},
+  {id:'polish',label:'정리·번역(Claude)',unit:'calls'},
+];
+const TB_KIND_GROUP={'통역(정확도)':'live_asr','Claude(통역 번역)':'live_tr','통역(속도)':'live','전사':'stt','정리·번역':'polish','Claude(정리·번역)':'polish'};
+function tbAgg(rows,from,to){
+  const o={};TB_GROUPS.forEach(g=>{o[g.id]={sec:0,calls:0,req:0,cost:0,unknown:false};});o.total=0;
+  (rows||[]).filter(r=>r.created_at>=from&&(!to||r.created_at<to)).forEach(r=>{
+    const g=o[TB_KIND_GROUP[r.kind]];if(!g)return;
+    const c=tbCost(r);g.cost+=c;o.total+=c;
+    if(/^Claude/.test(r.kind))g.req+=r.calls||0;
+    else{g.sec+=r.seconds||0;g.calls+=r.calls||0;}
+    if(r.kind==='정리·번역'&&!(r.tok_in>0))g.old=(g.old||0)+1;
+  });
+  return o;
+}
+const tbUseText=(g,unit)=>unit==='sec'?(g.sec?fmtMin(g.sec):'—'):unit==='req'?(g.req?g.req+'문장':'—'):(g.calls?g.calls+'건':'—');
 
 /* 음성 길이(초) — 사용 기록용. 못 읽으면 0 */
 function tbDuration(blob){return new Promise(ok=>{
@@ -37726,9 +37790,25 @@ const TB={
     catch(e){console.warn('[통번역] 사용 기록 실패',e);}
   },
   async myUsage(){
-    const {data,error}=await Store.sb.from('tb_usage').select('kind,seconds,calls,created_at').eq('user_id',Store.user.id).gte('created_at',monthStart(-1));
+    const {data,error}=await Store.sb.from('tb_usage').select('*').eq('user_id',Store.user.id).gte('created_at',monthStart(-1));
     if(error){if(isMissingTable(error))return null;throw new Error(explainSbError(error));}
     return data||[];
+  },
+  /* Claude 토큰 — 부를 때마다 쌓았다가 1분마다(그리고 창을 닫을 때) 한 줄씩 남긴다 */
+  acc:{},
+  addClaude(model,u,tag){
+    const k=(tag||'정리·번역')+'|'+model;const a=TB.acc[k]||(TB.acc[k]={n:0,i:0,o:0});
+    a.n++;a.i+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0)+(u.cache_read_input_tokens||0);a.o+=u.output_tokens||0;
+  },
+  async flushClaude(){
+    const acc=TB.acc;TB.acc={};
+    for(const [k,a] of Object.entries(acc)){const [tag,model]=k.split('|');
+      const row={user_id:Store.user.id,email:Store.user.email,kind:'Claude('+tag+')',seconds:0,calls:a.n,model,tok_in:a.i,tok_out:a.o};
+      try{const {error}=await Store.sb.from('tb_usage').insert(row);
+        if(error&&/tok_in|tok_out|column/i.test(error.message)){TB.noTokCols=true;delete row.tok_in;delete row.tok_out;await Store.sb.from('tb_usage').insert(row);}
+        else if(error)throw error;}
+      catch(e){console.warn('[통번역] 토큰 기록 실패',e);}
+    }
   },
   async admin(action,body={}){
     const {data,error}=await Store.sb.functions.invoke('tb-admin',{body:{action,...body}});
@@ -37865,7 +37945,7 @@ function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
         all+=(all?'\n\n':'')+(jobs.length>1?'### '+j.name+'\n':'')+txt;
       }
       if(!all.trim())throw new Error('받아쓴 글이 비어 있습니다 — 녹음에 말소리가 있는지 확인하세요');
-      TB.log('전사',secs,jobs.length,'qwen3-asr-flash');
+      TB.log('전사',secs,jobs.length,tbApplyStt());
       rec={...rec,md:tbPutTop(rec.md,'녹취 (받아쓰기)',all)};upd(rec.id,{md:rec.md});
       await runPolish(rec);
     }catch(e){
@@ -37957,113 +38037,73 @@ function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
 }
 
 
-/* ── 예전 PMS 데이터 정리 (관리자만, 한 번) ─────────────────────
-   메일·일정·계정·일반 노트를 지우고, 통역·전사 기록이었던 노트는 녹취록(tbrec)으로 옮긴다.
-   그다음 어떤 녹취록에도 연결되지 않은 첨부파일을 저장소에서 지운다(메일 첨부가 대부분). */
-const OLD_KINDS=['mails','events','accounts','notes','files','trash'];
-const isInterpNote=n=>{const t=n.tags||[];return t.includes('통역')||t.includes('전사')||/##\s*(녹취|실시간 통역|실시간 원문)/.test(n.md||'')||audioRefs(n.md||'').length>0;};
-const refPaths=recs=>{const s=new Set();const re=new RegExp('('+Store.user.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\/[^)\\s"\'\\\\]+)','g');
-  recs.forEach(r=>{let m;const t=JSON.stringify(r);while((m=re.exec(t)))s.add(m[1]);});return s;};
-async function listMyFiles(){
-  const out=[];const uidDir=Store.user.id;
-  for(let off=0;off<20000;off+=1000){
-    const {data,error}=await Store.sb.storage.from('pms-files').list(uidDir,{limit:1000,offset:off,sortBy:{column:'name',order:'asc'}});
-    if(error)throw new Error(error.message);
-    (data||[]).filter(f=>f.id).forEach(f=>out.push({path:uidDir+'/'+f.name,size:(f.metadata&&f.metadata.size)||0}));
-    if(!data||data.length<1000)break;
-  }
-  return out;
+/* ── 내 설정·사용량 ── */
+function TbSelect({id,value,options,onChange}){
+  const opts=options.some(o=>o.id===value)?options:[...options,{id:value,label:value+' (예전 설정)'}];
+  return <select id={id} value={value} onChange={e=>onChange(e.target.value)} style={{...inputStyle,width:'100%',maxWidth:440}}>
+    {opts.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>;
 }
-function TbCleanup({recs,onDone,toast}){
-  const {Card,Button,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
-  const [scan,setScan]=React.useState(null);const [err,setErr]=React.useState('');const [word,setWord]=React.useState('');
-  const [prog,setProg]=React.useState('');const [done,setDone]=React.useState(null);
-  const doScan=async()=>{setErr('');setScan(null);setProg('살펴보는 중…');
-    try{
-      const {data,error}=await Store.sb.from('pms_items').select('kind,item_id,data,deleted_at').eq('user_id',Store.user.id).neq('kind',TB_KIND);
-      if(error)throw new Error(explainSbError(error));
-      const rows=data||[];const by={};rows.forEach(r=>{by[r.kind]=(by[r.kind]||0)+1;});
-      const live=rows.filter(r=>r.kind==='notes'&&!r.deleted_at).map(r=>r.data);
-      const move=live.filter(isInterpNote);
-      setProg('저장소 파일 세는 중…');
-      const files=await listMyFiles();
-      const keep=refPaths([...recs,...move]);
-      const drop=files.filter(f=>!keep.has(f.path));
-      setScan({rows:rows.length,by,move,files:files.length,mb:files.reduce((a,f)=>a+f.size,0)/1048576,drop,dropMb:drop.reduce((a,f)=>a+f.size,0)/1048576});
-    }catch(e){setErr(e.message);}
-    setProg('');};
-  React.useEffect(()=>{doScan();},[]);
-  const run=async()=>{if(!scan)return;setErr('');
-    try{
-      /* ① 통역·전사 노트 → 녹취록 */
-      setProg('통번역 기록 옮기는 중…');
-      for(const n of scan.move){const rec={...n,created:n.created||new Date().toISOString(),tags:[...new Set([...(n.tags||[]),...(/##\s*실시간/.test(n.md||'')?['통역']:[])])]};await TB.save(rec);}
-      /* ② 예전 데이터 행 삭제 */
-      setProg('메일·일정·노트 지우는 중…');
-      const {error:e1}=await Store.sb.from('pms_items').delete().eq('user_id',Store.user.id).neq('kind',TB_KIND);
-      if(e1)throw new Error(explainSbError(e1));
-      try{await Store.sb.from('pms_collections').delete().eq('user_id',Store.user.id);}catch(_){}
-      /* ③ 쓰지 않는 파일 삭제 (100개씩) */
-      let n=0;
-      for(let i=0;i<scan.drop.length;i+=100){
-        const chunk=scan.drop.slice(i,i+100).map(f=>f.path);
-        setProg('파일 지우는 중 '+Math.min(i+100,scan.drop.length)+'/'+scan.drop.length);
-        const {error}=await Store.sb.storage.from('pms-files').remove(chunk);
-        if(error)throw new Error('파일 삭제 실패: '+error.message);
-        n+=chunk.length;
-      }
-      try{['pms.mailfiles','pms.zone'].forEach(k=>localStorage.removeItem(k));}catch(_){}
-      setDone({moved:scan.move.length,rows:scan.rows,files:n,mb:scan.dropMb});setProg('');setWord('');
-      onDone&&onDone();toast('정리했습니다');
-    }catch(e){setErr(e.message);setProg('');}
-  };
-  const kindName={mails:'메일',events:'일정',notes:'노트',accounts:'메일 계정',files:'파일 목록',trash:'휴지통'};
-  return <Card title="🧹 예전 PMS 데이터 정리">
-    {done?<InfoBar>완료 — 통번역 기록 {done.moved}건을 녹취록으로 옮기고, 데이터 {done.rows}건과 파일 {done.files}개({done.mb.toFixed(0)}MB)를 지웠습니다. Supabase 사용량 화면에는 최대 1시간 뒤에 반영됩니다.</InfoBar>:<>
-    <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',lineHeight:1.7,marginBottom:8}}>메일·일정·메일 계정·일반 노트를 <b>되돌릴 수 없게</b> 지우고, 어떤 녹취록에도 쓰이지 않는 첨부파일(주로 메일 첨부)을 저장소에서 지웁니다. 통역·전사 기록이었던 노트는 먼저 녹취록으로 옮깁니다. 팀원 데이터는 건드리지 않습니다.</div>
-    {err&&<InfoBar tone="warn">{err}</InfoBar>}
-    {prog&&<InfoBar>⏳ {prog} — 창을 닫지 마세요</InfoBar>}
-    {scan&&<div style={{display:'grid',gap:4,fontSize:'var(--fs-md)',margin:'8px 0 12px',fontVariantNumeric:'tabular-nums'}}>
-      <div>지울 데이터: <b>{scan.rows}건</b> {Object.keys(scan.by).length?'('+Object.entries(scan.by).map(([k,v])=>(kindName[k]||k)+' '+v).join(' · ')+')':''}</div>
-      <div>녹취록으로 옮길 통번역 기록: <b>{scan.move.length}건</b></div>
-      <div>저장소 파일: 전체 {scan.files}개 · {scan.mb.toFixed(0)}MB → 지울 파일 <b>{scan.drop.length}개 · {scan.dropMb.toFixed(0)}MB</b></div>
-    </div>}
-    {scan&&(scan.rows||scan.drop.length)?<div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-      <label htmlFor="tbWipe" style={{fontSize:'var(--fs-sm2)'}}>확인을 위해 <b>삭제</b>라고 입력</label>
-      <input id="tbWipe" value={word} onChange={e=>setWord(e.target.value)} style={{...inputStyle,width:100}}/>
-      <Button variant="danger" disabled={word.trim()!=='삭제'||!!prog} onClick={run}>영구 삭제</Button>
-      <Button variant="ghost" disabled={!!prog} onClick={doScan}>다시 세기</Button></div>
-      :scan&&<InfoBar>정리할 것이 없습니다.</InfoBar>}
-    </>}
+function TbModels({toast}){
+  const {Card,Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const live=LIVE.sess&&LIVE.sess.running;
+  const [m,setM]=React.useState(()=>({
+    asr:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,tr:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,live:Store.cfg.liveModel||LIVE_MODELS[0].id,
+    stt:Store.cfg.tbSttModel||TB_STT[0].id,polish:Store.cfg.claudeModel||CLAUDE_MODELS[0].id}));
+  const set=p=>setM(o=>({...o,...p}));
+  const save=()=>{Store.saveCfg({liveAsrModel:m.asr,liveTrModel:m.tr,liveModel:m.live,tbSttModel:m.stt,claudeModel:m.polish});
+    tbApplyStt();window.dispatchEvent(new Event('live-cfg'));toast('모델을 저장했습니다'+(live?' — 지금 통역은 다음 시작부터 적용':''));};
+  const per=(id,unit)=>{const p=TB_PRICE_SEC[id];if(p)return '시간당 약 '+fmtUsd(p*3600);const t=TB_PRICE_TOK[id];return t?'입력 $'+t[0]+' · 출력 $'+t[1]+' /100만 토큰':'';};
+  const row=(label,key,options,desc)=><div style={{display:'grid',gap:4}}>
+    <label htmlFor={'tbm_'+key} style={{fontSize:'var(--fs-sm2)',fontWeight:600}}>{label}</label>
+    <TbSelect id={'tbm_'+key} value={m[key]} options={options} onChange={v=>set({[key]:v})}/>
+    <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{desc} · {per(m[key])}</span></div>;
+  return <Card title="🧠 모델">
+    <div style={{display:'grid',gap:14}}>
+      {row('통역 🎯 정확도 우선 — 받아쓰기','asr',LIVE_ASR_MODELS,'중국어를 글로 받아 적는 모델')}
+      {row('통역 🎯 정확도 우선 — 번역','tr',LIVE_TR_MODELS,'받아쓴 문장을 한국어로 옮기는 Claude. 빠를수록 자막이 일찍 뜸')}
+      {row('통역 ⚡ 속도 우선','live',LIVE_MODELS,'받아쓰기와 번역을 한 번에 하는 동시통역 모델')}
+      {row('녹음 파일 전사','stt',TB_STT,'OpenAI는 무료 사용량이 없어 바로 청구됩니다')}
+      {row('녹취록 정리·번역','polish',CLAUDE_MODELS,'전사 글을 다듬고 한국어로 정리하는 Claude')}
+      <div><Button size="sm" onClick={save}>저장</Button>
+        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginLeft:8}}>내 브라우저에만 저장됩니다(팀원은 각자 고름)</span></div>
+    </div>
   </Card>;
 }
-
-/* ── 내 설정·사용량 ── */
-function TbSettings({toast,role,recs,reload}){
+function TbSettings({toast}){
   const {Card,Button,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
   const [hint,setHint]=React.useState(Store.cfg.sttHint||'');
   const [usage,setUsage]=React.useState(undefined);
-  React.useEffect(()=>{TB.myUsage().then(setUsage).catch(()=>setUsage(null));},[]);
-  const sum=(rows,from,to)=>{const o={};(rows||[]).filter(r=>r.created_at>=from&&(!to||r.created_at<to)).forEach(r=>{o[r.kind]=o[r.kind]||{s:0,c:0};o[r.kind].s+=r.seconds||0;o[r.kind].c+=r.calls||0;});return o;};
-  const thisM=sum(usage,monthStart(0)),lastM=sum(usage,monthStart(-1),monthStart(0));
-  const kinds=['통역(정확도)','통역(속도)','전사','정리·번역'];
-  const cell=(o,k)=>!o[k]?'—':k==='정리·번역'?o[k].c+'건':fmtMin(o[k].s);
+  React.useEffect(()=>{TB.flushClaude().finally(()=>TB.myUsage().then(setUsage).catch(()=>setUsage(null)));},[]);
+  const A=tbAgg(usage,monthStart(0)),B=tbAgg(usage,monthStart(-1),monthStart(0));
+  const noTok=usage&&usage.length&&!('tok_in' in usage[0]);
+  const tdS={padding:'6px 10px',borderBottom:'1px solid var(--border-default)',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'};
   return <div style={{display:'grid',gap:14,maxWidth:760}}>
-    {role==='owner'&&<TbCleanup recs={recs} toast={toast} onDone={reload}/>}
+    <TbModels toast={toast}/>
     <Card title="용어 힌트">
       <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginBottom:6,lineHeight:1.6}}>자주 나오는 회사명·제품명·사람 이름·전문용어를 쉼표로 적어 두세요. 통역의 받아쓰기, 번역, 녹취록 정리에 모두 쓰입니다. 이 브라우저에만 저장됩니다.</div>
       <textarea id="tbHint" value={hint} onChange={e=>setHint(e.target.value)} rows={3} placeholder="예: 乙烯, 丙烯, 石脑油, 温山, 대한유화" style={{...inputStyle,lineHeight:1.6}}/>
       <div style={{marginTop:8}}><Button size="sm" onClick={()=>{Store.saveCfg({sttHint:hint.trim()});toast('용어 힌트를 저장했습니다');}}>저장</Button></div>
     </Card>
-    <Card title="내 사용량">
-      {usage===undefined?<div style={{color:'var(--text-label)'}}>불러오는 중…</div>:usage===null?<InfoBar tone="warn">사용 기록 표가 아직 없습니다 — 관리자에게 설치 SQL 실행을 요청하세요</InfoBar>:
-      <div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',fontSize:'var(--fs-sm2)',minWidth:360}}>
-        <thead><tr>{['','이번 달','지난달'].map(h=><th key={h} style={{textAlign:'left',padding:'6px 12px',borderBottom:'1px solid var(--border-strong)'}}>{h}</th>)}</tr></thead>
-        <tbody>{kinds.map(k=><tr key={k}><td style={{padding:'6px 12px',borderBottom:'1px solid var(--border-default)'}}>{k}</td>
-          <td style={{padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontVariantNumeric:'tabular-nums'}}>{cell(thisM,k)}</td>
-          <td style={{padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontVariantNumeric:'tabular-nums'}}>{cell(lastM,k)}</td></tr>)}</tbody></table></div>}
+    <Card title="내 사용량 · 예상 요금">
+      {usage===undefined?<div style={{color:'var(--text-label)'}}>불러오는 중…</div>:usage===null?<InfoBar tone="warn">사용 기록 표가 아직 없습니다 — 관리자에게 설치 SQL 실행을 요청하세요</InfoBar>:<>
+      {noTok&&<InfoBar tone="warn">Claude 토큰을 적을 칸이 아직 없습니다 — 관리자가 업데이트 SQL을 실행해야 번역·정리 요금이 잡힙니다</InfoBar>}
+      <div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',fontSize:'var(--fs-sm2)',minWidth:520}}>
+        <thead><tr>{['','이번 달','요금','지난달','요금'].map((h,i)=><th key={i} style={{textAlign:i?'right':'left',padding:'6px 10px',borderBottom:'1px solid var(--border-strong)'}}>{h}</th>)}</tr></thead>
+        <tbody>{TB_GROUPS.map(g=><tr key={g.id}><td style={{...tdS,whiteSpace:'normal'}}>{g.label}</td>
+          <td style={{...tdS,textAlign:'right'}}>{tbUseText(A[g.id],g.unit)}</td><td style={{...tdS,textAlign:'right'}}>{A[g.id].cost?fmtUsd(A[g.id].cost):'—'}</td>
+          <td style={{...tdS,textAlign:'right'}}>{tbUseText(B[g.id],g.unit)}</td><td style={{...tdS,textAlign:'right'}}>{B[g.id].cost?fmtUsd(B[g.id].cost):'—'}</td></tr>)}
+          <tr style={{fontWeight:600}}><td style={tdS}>합계</td><td style={tdS}></td><td style={{...tdS,textAlign:'right'}}>{fmtUsd(A.total)}<div style={{fontWeight:400,fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{fmtKrw(A.total)}</div></td>
+            <td style={tdS}></td><td style={{...tdS,textAlign:'right'}}>{fmtUsd(B.total)}<div style={{fontWeight:400,fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{fmtKrw(B.total)}</div></td></tr>
+        </tbody></table></div>
+      <TbCostNote/></>}
     </Card>
   </div>;
+}
+function TbCostNote(){
+  return <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:8,lineHeight:1.6}}>
+    예상 요금 = 기록된 사용량 × 공개 단가({TB_PRICE_DATE} 기준, ₩ 환산 1달러={TB_USD_KRW.toLocaleString()}원). 실제 청구서와 조금 다를 수 있습니다.
+    Alibaba(받아쓰기·속도 우선·Qwen 전사)는 <b>무료 사용량이 남아 있는 동안 실제 청구가 0</b>이고, Claude와 OpenAI는 바로 청구됩니다.
+    v8.1 이전의 정확도 우선 번역과 정리·번역은 토큰을 적지 않아 요금에 빠져 있습니다.</div>;
 }
 
 /* ── 팀 관리 (소유자만) ── */
@@ -38081,8 +38121,14 @@ function TbTeam({toast}){
   const copy=async t=>{try{await navigator.clipboard.writeText(t);toast('복사했습니다');}catch(_){const el=document.getElementById('tbLink');if(el){el.focus();el.select();}toast('선택된 링크를 Ctrl+C로 복사하세요');}};
   const th={textAlign:'left',padding:'6px 10px',borderBottom:'1px solid var(--border-strong)',whiteSpace:'nowrap',fontSize:'var(--fs-sm)'};
   const td={padding:'7px 10px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm2)',verticalAlign:'middle'};
-  const u=(m,key)=>{const x=(data&&data.usage&&data.usage[m.email]&&data.usage[m.email][key])||{};
-    const live=(x['통역(정확도)']||0)+(x['통역(속도)']||0);return {live,stt:x['전사']||0,polish:x['정리·번역 건']||0};};
+  /* 새 tb-admin 은 rows(사람별 기록)를 준다 — 예전 것은 usage(합계)만 */
+  const u=(m,key)=>{
+    if(data&&data.rows){const rs=data.rows.filter(r=>String(r.email||'').toLowerCase()===m.email);
+      const o=key==='thisMonth'?tbAgg(rs,monthStart(0)):tbAgg(rs,monthStart(-1),monthStart(0));
+      return {live:o.live_asr.sec+o.live.sec,stt:o.stt.sec,polish:o.polish.calls,cost:o.total};}
+    const x=(data&&data.usage&&data.usage[m.email]&&data.usage[m.email][key])||{};
+    const live=(x['통역(정확도)']||0)+(x['통역(속도)']||0);return {live,stt:x['전사']||0,polish:x['정리·번역 건']||0,cost:null};};
+  const tot=key=>(data&&data.rows)?tbAgg(data.rows,key==='thisMonth'?monthStart(0):monthStart(-1),key==='thisMonth'?null:monthStart(0)).total:null;
   return <div style={{display:'grid',gap:14}}>
     <Card title="👥 팀원" badge={data&&<Badge tone="muted">{(data.members||[]).length}명</Badge>}>
       {err&&<InfoBar tone="warn">{err}</InfoBar>}
@@ -38095,19 +38141,27 @@ function TbTeam({toast}){
         <div style={{display:'flex',gap:6,marginTop:6}}><input id="tbLink" readOnly value={link.url} onFocus={e=>e.target.select()} style={{...inputStyle,fontFamily:'var(--font-mono)',fontSize:12}}/>
           <Button size="sm" onClick={()=>copy(link.url)}>복사</Button><Button variant="ghost" size="sm" onClick={()=>setLink(null)}>닫기</Button></div></div>}
       {!data&&!err&&<div style={{color:'var(--text-label)'}}>불러오는 중…</div>}
-      {data&&<div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',width:'100%',minWidth:640}}>
-        <thead><tr><th style={th}>이메일</th><th style={th}>역할</th><th style={th}>이번 달 통역</th><th style={th}>이번 달 전사</th><th style={th}>지난달 통역·전사</th><th style={th}></th></tr></thead>
+      {data&&<div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',width:'100%',minWidth:820}}>
+        <thead><tr><th style={th}>이메일</th><th style={th}>역할</th><th style={th}>이번 달 통역</th><th style={th}>이번 달 전사</th><th style={th}>이번 달 요금</th><th style={th}>지난달 통역·전사</th><th style={th}>지난달 요금</th><th style={th}></th></tr></thead>
         <tbody>{(data.members||[]).map(m=>{const a=u(m,'thisMonth'),b=u(m,'lastMonth');return <tr key={m.email}>
           <td style={td}>{m.email}{m.banned&&<span style={{color:'var(--color-danger)',marginLeft:6}}>차단됨</span>}{m.lastSignIn?null:<span style={{color:'var(--text-label)',marginLeft:6}}>· 아직 로그인 안 함</span>}</td>
           <td style={td}>{m.role==='owner'?'관리자':'팀원'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.live?fmtMin(a.live):'—'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.stt?fmtMin(a.stt):'—'}{a.polish?' · 정리 '+a.polish+'건':''}</td>
+          <td style={{...td,fontVariantNumeric:'tabular-nums',textAlign:'right'}}>{a.cost==null?'—':fmtUsd(a.cost)}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{(b.live||b.stt)?fmtMin(b.live)+' · '+fmtMin(b.stt):'—'}</td>
+          <td style={{...td,fontVariantNumeric:'tabular-nums',textAlign:'right'}}>{b.cost==null?'—':fmtUsd(b.cost)}</td>
           <td style={{...td,whiteSpace:'nowrap'}}>{m.role!=='owner'&&<>
             <Button variant="ghost" size="xs" disabled={busy} onClick={()=>mkLink(m.email)} title="로그아웃됐을 때 다시 들어올 링크">로그인 링크</Button>
             {del===m.email?<><Button variant="danger" size="xs" disabled={busy} onClick={()=>remove(m.email)}>빼기 확인</Button><Button variant="ghost" size="xs" onClick={()=>setDel('')}>취소</Button></>
               :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>setDel(m.email)}>명단에서 빼기</Button>}</>}</td>
-        </tr>;})}</tbody></table></div>}
+        </tr>;})}
+        {data.rows&&<tr style={{fontWeight:600}}><td style={td}>팀 합계</td><td style={td}></td><td style={td}></td><td style={td}></td>
+          <td style={{...td,textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{fmtUsd(tot('thisMonth'))}<div style={{fontWeight:400,fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{fmtKrw(tot('thisMonth'))}</div></td><td style={td}></td>
+          <td style={{...td,textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{fmtUsd(tot('lastMonth'))}<div style={{fontWeight:400,fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{fmtKrw(tot('lastMonth'))}</div></td><td style={td}></td></tr>}
+        </tbody></table></div>}
+      {data&&!data.rows&&<InfoBar tone="warn">요금을 보려면 tb-admin 함수를 새 코드로 다시 배포하세요</InfoBar>}
+      {data&&data.rows&&<TbCostNote/>}
       <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:8,lineHeight:1.6}}>명단에서 빼면 그 계정은 바로 로그인이 막히고(기록은 남음), 다시 추가하면 풀립니다. 비용은 모두 관리자 계정으로 청구됩니다. 한도는 없고 사용 시간만 기록합니다.</div>
     </Card>
   </div>;
@@ -38134,6 +38188,10 @@ function TbShell({user,role,onLogout}){
   const toast=m=>{setToastMsg(m);clearTimeout(timers.current.t);timers.current.t=setTimeout(()=>setToastMsg(''),2200);};
   React.useEffect(()=>{try{localStorage.setItem('tb.tab',tab);}catch(_){}},[tab]);
   React.useEffect(()=>{TB.list().then(r=>{recsRef.current=r;setRecs(r);}).catch(e=>setLoadErr(e.message));},[]);
+  /* Claude 토큰 기록(요금 계산용) */
+  React.useEffect(()=>{window.__claudeUsage=TB.addClaude;const t=setInterval(TB.flushClaude,60000);
+    const bye=()=>{TB.flushClaude();};window.addEventListener('pagehide',bye);
+    return()=>{clearInterval(t);window.removeEventListener('pagehide',bye);TB.flushClaude();window.__claudeUsage=null;};},[]);
   const setAll=next=>{recsRef.current=next;setRecs(next);};
   const persist=rec=>{clearTimeout(timers.current[rec.id]);timers.current[rec.id]=setTimeout(()=>{
     const cur=recsRef.current.find(r=>r.id===rec.id);if(cur)TB.save(cur).catch(e=>toast('⚠ 저장 실패 — '+e.message));},600);};
@@ -38161,7 +38219,7 @@ function TbShell({user,role,onLogout}){
         <div style={{display:tab==='live'?'block':'none'}}>
           <LiveView db={{notes:recs||[]}} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         {tab==='rec'&&<TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/>}
-        {tab==='me'&&<TbSettings toast={toast} role={role} recs={recs||[]} reload={()=>TB.list().then(r=>{recsRef.current=r;setRecs(r);})}/>}
+        {tab==='me'&&<TbSettings toast={toast}/>}
         {tab==='team'&&role==='owner'&&<TbTeam toast={toast}/>}
       </>}
     </main>
@@ -38175,9 +38233,7 @@ function TbApp(){
   React.useEffect(()=>{const h=new URLSearchParams(location.hash.slice(1));
     if(h.get('error')){setNote(/expired|invalid/i.test(h.get('error_description')||'')?'로그인 링크가 만료됐거나 이미 쓰였습니다 — 새 링크를 받으세요':(h.get('error_description')||'로그인에 실패했습니다'));history.replaceState(null,'',location.pathname);}},[]);
   React.useEffect(()=>{
-    /* 녹취록 전사는 중국어가 강한 Alibaba 엔진으로 (이 창에서만, 저장하지 않음) */
-    Store.cfg={...Store.cfg,sttEngine:'paraformer'};
-    Store.init().then(u=>{setUser(u||null);if(location.hash.includes('access_token'))history.replaceState(null,'',location.pathname);});
+    Store.init().then(u=>{tbApplyStt();setUser(u||null);if(location.hash.includes('access_token'))history.replaceState(null,'',location.pathname);});
   },[]);
   const checkRole=React.useCallback(async()=>{setRole(undefined);try{setRole(await TB.role());}catch(e){setNote(e.message);setRole(null);}},[]);
   React.useEffect(()=>{if(user)checkRole();},[user]);
