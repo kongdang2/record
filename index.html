@@ -37068,6 +37068,11 @@ function convLang(t){t=String(t||'');const n=re=>(t.match(re)||[]).length;
   if(kana)return 'ja';
   if(han)return 'zh';
   return lat>ko*3?'en':'ko';}
+/* 누가 말했나 — 받아쓰기(LLM 기반)가 한국어를 다른 언어 글자(일본어·영어…)로 적어 버리는 때가 있다.
+   상대는 늘 상대 언어로 말하므로, 상대 언어 글자가 아니면 모두 '나'로 본다. 한글이 조금이라도 섞여 있어도 '나' */
+function convWho(t,theirs){const lang=convLang(t);if(!lang)return '';
+  if(lang==='ko'||/[가-힣]/.test(t))return 'me';
+  return lang===theirs?'them':'me';}
 let CONV_SILENT='';
 const convSilent=()=>CONV_SILENT||(CONV_SILENT=pcm16b64(new Float32Array(LIVE_CHUNK)));
 /* 기기 음성 고르기 — zh 는 zh-CN 을 먼저 */
@@ -37131,7 +37136,7 @@ class ConvTwin extends LiveSession{
   turn(g){g.at=Date.now();this.keep(g);}
   mdone(g){this.keep(g);}
   keep(g){if(!g.zhDone||!g.mDone||g.kept)return;g.kept=true;
-    if(convLang(g.zh)!=='ko')return;
+    if(convWho(g.zh,this.opt.theirs)!=='me')return;
     this.got.push({at:g.at||Date.now(),src:convNorm(g.zh),tr:String(g.m||'').trim(),used:false});if(this.got.length>40)this.got.shift();}
   /* 본 세션의 내 말 g 와 짝 찾기 — 글이 같으면 우선, 아니면 시간이 가장 가까운 것 */
   match(g){const now=Date.now(),src=convNorm(g.zh);
@@ -37163,7 +37168,8 @@ class ConvSession extends LiveSession{
     /* 메아리: 최근 20초 안에 앱이 읽어 준 문장과 많이 겹치면 버린다 */
     const said=(this.said||[]).filter(x=>Date.now()-x.at<20000);
     if(g.zh.trim()&&said.some(x=>convSim(g.zh,x.text)>=0.45)){g.echo=true;g.koDone=true;this.log('메아리로 보고 버림: '+g.zh.slice(0,30));this.bump();return;}
-    const lang=convLang(g.zh);g.lang=lang||this.opt.theirs;g.who=lang==='ko'?'me':'them';g.to=g.who==='me'?this.opt.theirs:'ko';
+    const lang=convLang(g.zh);g.lang=lang||this.opt.theirs;g.who=convWho(g.zh,this.opt.theirs)||'them';g.to=g.who==='me'?this.opt.theirs:'ko';
+    g.wrongScript=g.who==='me'&&lang!=='ko';   /* 내 말인데 한국어 글자가 아니다 → 받아쓰기가 다른 언어로 적음 */
     if(!g.zh.trim()){g.koDone=true;this.bump();return;}
     if(this.opt.fast&&await this.fastTurn(g))return;
     const done=this.segs.filter(x=>x.koDone&&x.who&&x!==g&&x.zh.trim()).slice(-6);
@@ -37177,9 +37183,10 @@ class ConvSession extends LiveSession{
       +'- 말하듯 자연스럽고 짧게. 소리로 읽어 줄 문장이므로 괄호·기호를 쓰지 않는다\n'
       +'- 숫자·날짜·가격·수량은 정확히\n'
       +'- 알아들을 내용이 없으면(잡음·추임새뿐이면) 아무것도 출력하지 않는다'
+      +'\n- 받아쓰기는 한국어 말을 다른 언어 글자(일본어·영어·중국어 등)로 적어 버릴 때가 있다. 「나」의 발화가 한국어가 아닌 글자로 왔으면 그 뜻을 그대로 '+langLabel(this.opt.theirs)+'로 옮긴다'
       +(g.to==='ko'?'\n- 한국어는 존댓말':'')
       +(hint?'\n\n자주 나오는 용어: '+hint:'');
-    const prompt=(prev?'앞선 대화(참고용):\n'+prev+'\n\n':'')+'이번 발화('+(g.who==='me'?'나':'상대')+'):\n'+g.zh;
+    const prompt=(prev?'앞선 대화(참고용):\n'+prev+'\n\n':'')+'이번 발화('+(g.who==='me'?'나':'상대')+(g.wrongScript?', 한국어 말인데 받아쓰기가 다른 언어 글자로 적음':'')+'):\n'+g.zh;
     try{
       const out=await askClaude(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:500,usageTag:'통역 번역'});
       g.ko=String(out||'').trim().replace(/^["“「]|["”」]$/g,'');g.koS='';
@@ -37384,7 +37391,7 @@ function ConvView({setDb,toast,onOpenNote}){
     </div>
   </Card>;
 }
-Object.assign(window,{ConvView,ConvSession,ConvConn,convLang,convVoice,CONV,CONV_THEIRS});
+Object.assign(window,{ConvView,ConvSession,ConvConn,convLang,convWho,convVoice,CONV,CONV_THEIRS});
 </script>
 <script type="text/babel">/* ── LLM 위키 모드 ────────────────────────────────────────────────
    ① 규칙 노트  — 위키의 문법·정돈 기준. 모든 위키 작업의 system 프롬프트가 된다
@@ -38008,7 +38015,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v9.3';
+const TB_VERSION='v9.4';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
