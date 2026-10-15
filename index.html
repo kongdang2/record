@@ -37064,7 +37064,7 @@ const CONV_LAYOUTS=[{id:'call',label:'📞 한 화면',desc:'스피커폰 통화
 function convLang(t){t=String(t||'');const n=re=>(t.match(re)||[]).length;
   const ko=n(/[가-힣]/g),kana=n(/[぀-ヿ]/g),han=n(/[一-鿿]/g),lat=n(/[a-z]/gi);
   if(!ko&&!kana&&!han&&!lat)return '';
-  if(ko&&ko>=han+kana)return 'ko';
+  if(ko&&ko*3>=han+kana)return 'ko';   /* 한글이 1/4 이상이면 한국어(받아쓰기가 일부를 한자·가나로 적어도) */
   if(kana)return 'ja';
   if(han)return 'zh';
   return lat>ko*3?'en':'ko';}
@@ -37108,6 +37108,9 @@ class ConvConn extends LiveConn{
     if(t==='conversation.item.input_audio_transcription.completed'){const i=this.si;super.handle(ev);const g=this.segs[i];if(g)this.sess.turn(g);return;}
     super.handle(ev);}
 }
+/* 글자 두 개씩 묶어 겹치는 비율 — 앱이 읽어 준 소리가 다시 들어온 것(메아리)인지 가린다 */
+function convSim(a,b){const g=t=>{t=convNorm(t);const o=new Set();for(let i=0;i<t.length-1;i++)o.add(t.slice(i,i+2));return o;};
+  const A=g(a),B=g(b);if(A.size<2||B.size<2)return 0;let n=0;A.forEach(x=>{if(B.has(x))n++;});return n/Math.min(A.size,B.size);}
 const convNorm=t=>String(t||'').replace(/[\s.,!?。，！？、…~·'"“”‘’「」]/g,'').toLowerCase();
 const convWait=(ok,ms)=>new Promise(r=>{const t0=Date.now();const f=()=>{const v=ok();if(v||Date.now()-t0>ms)return r(v);setTimeout(f,100);};f();});
 
@@ -37157,6 +37160,9 @@ class ConvSession extends LiveSession{
     if(this.twin&&this.twin.running)this.twin.push(x);}
   /* 한 문장이 끝남 → 누가 말했는지 가리고 반대쪽 언어로 */
   async turn(g){
+    /* 메아리: 최근 20초 안에 앱이 읽어 준 문장과 많이 겹치면 버린다 */
+    const said=(this.said||[]).filter(x=>Date.now()-x.at<20000);
+    if(g.zh.trim()&&said.some(x=>convSim(g.zh,x.text)>=0.45)){g.echo=true;g.koDone=true;this.log('메아리로 보고 버림: '+g.zh.slice(0,30));this.bump();return;}
     const lang=convLang(g.zh);g.lang=lang||this.opt.theirs;g.who=lang==='ko'?'me':'them';g.to=g.who==='me'?this.opt.theirs:'ko';
     if(!g.zh.trim()){g.koDone=true;this.bump();return;}
     if(this.opt.fast&&await this.fastTurn(g))return;
@@ -37203,8 +37209,9 @@ class ConvSession extends LiveSession{
     const u=new SpeechSynthesisUtterance(text);const code=CONV_TTS[lang]||lang;u.lang=code;
     const v=convVoice(code);if(v)u.voice=v;u.rate=Number(this.opt.rate)||1;
     this.speaking=true;this.spkAt=Date.now();
+    (this.said=this.said||[]).push({text,at:Date.now()});if(this.said.length>12)this.said.shift();
     u.onstart=()=>{this.speaking=true;this.spkAt=Date.now();this.bump();};
-    u.onend=u.onerror=()=>{this.spkAt=Date.now()-1100;};   /* 끝난 뒤 0.4초 더 무음(울림 꼬리) */
+    u.onend=u.onerror=()=>{this.spkAt=Date.now()-500;};   /* 끝난 뒤 1초 더 무음(스피커 지연·울림 꼬리) */
     ss.speak(u);this.bump();
   }
   stop(hard){clearInterval(this.spkW);if(this.twin)this.twin.stop(hard);try{window.speechSynthesis&&window.speechSynthesis.cancel();}catch(_){}
@@ -37306,7 +37313,7 @@ function ConvView({setDb,toast,onOpenNote}){
   const reset=()=>{CONV.sess=null;CONV.saved=null;force();};
   /* 누르는 동안 듣기 */
   const hold=v=>e=>{if(e&&e.preventDefault)e.preventDefault();if(CONV.sess){CONV.sess.held=v;force();}};
-  const segs=sess?sess.segs.filter(g=>g.zh||g.zhS||g.ko||g.koS):[];
+  const segs=sess?sess.segs.filter(g=>!g.echo&&(g.zh||g.zhS||g.ko||g.koS)):[];
   const secs=sess&&sess.t0?Math.floor(((sess.running?Date.now():(sess.tEnd||Date.now()))-sess.t0)/1000):0;
   const lvl=Math.min(1,(sess&&sess.level||0)*3);
   const status=!sess?'대기':sess.running?(!(sess.active&&sess.active.ready)?'연결 중…':sess.speaking?'🔊 읽는 중':sess.muted?'손 떼면 쉼':'듣는 중'):'멈춤';
@@ -38001,7 +38008,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v9.2';
+const TB_VERSION='v9.3';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
