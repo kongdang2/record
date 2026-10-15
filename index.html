@@ -37276,7 +37276,7 @@ function ConvView({setDb,toast,onOpenNote}){
   const mobile=useMobile();
   const [,force]=React.useReducer(x=>x+1,0);
   const [opt,setOpt]=React.useState(()=>({theirs:Store.cfg.convTheirs||'zh',layout:Store.cfg.convLayout||'call',
-    fast:!!Store.cfg.convFast,speakThem:Store.cfg.convSpeakThem!==false,speakMe:!!Store.cfg.convSpeakMe,ptt:!!Store.cfg.convPtt,record:!!Store.cfg.convRecord,rate:Store.cfg.convRate||'1'}));
+    fast:false,/* v9.7: 대화는 🎯 정확하게만(받아쓰기 asr + 언어 힌트). ⚡ 빠르게 코드는 남겨 두되 화면에서 뺐다 */speakThem:Store.cfg.convSpeakThem!==false,speakMe:!!Store.cfg.convSpeakMe,ptt:!!Store.cfg.convPtt,record:!!Store.cfg.convRecord,rate:Store.cfg.convRate||'1'}));
   const [saving,setSaving]=React.useState('');const [voices,setVoices]=React.useState(0);
   const [who,setWho]=React.useState('auto');   /* 말하는 사람: auto | me | them (대화마다 자동으로 시작) */
   const pickWho=w=>{setWho(w);if(CONV.sess)CONV.sess.opt.who=w;};
@@ -37343,7 +37343,9 @@ function ConvView({setDb,toast,onOpenNote}){
   const whoBtn=(id,label,on)=><button key={id} type="button" onClick={()=>pickWho(id)} aria-pressed={on}
     style={{flex:1,padding:mobile?'10px 4px':'8px 10px',borderRadius:8,border:'1px solid '+(on?'#15352F':'var(--border-strong)'),background:on?'#15352F':'#fff',color:on?'#fff':'var(--text-body)',
       fontWeight:on?700:500,fontSize:mobile?14:'var(--fs-sm2)',cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{label}</button>;
-  const whoRow=running&&<div style={{display:'flex',gap:6,margin:'6px 0',alignItems:'center'}}>
+  /* 말하는 사람 고르기는 ⚡ 빠르게에서만 — 🎯 정확하게는 받아쓰기에 두 언어를 알려 주므로 글자로 가려도 맞는다 */
+  /* 말하는 사람 단추는 v9.7에서 뺐다(받아쓰기에 두 언어를 알려 주므로 글자로 가린다). 코드는 둔다 */
+  const whoRow=false&&running&&opt.fast&&<div style={{display:'flex',gap:6,margin:'6px 0',alignItems:'center'}}>
     <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',whiteSpace:'nowrap'}}>말하는 사람</span>
     {whoBtn('auto','자동',who==='auto')}{whoBtn('me','🇰🇷 나',who==='me')}{whoBtn('them',theirs.label+' 상대',who==='them')}</div>;
   const pttBtn=opt.ptt&&running&&<button type="button" onPointerDown={hold(true)} onPointerUp={hold(false)} onPointerLeave={hold(false)} onPointerCancel={hold(false)}
@@ -37362,10 +37364,6 @@ function ConvView({setDb,toast,onOpenNote}){
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6,fontSize:'var(--fs-sm2)'}}>
       <span>한국어 ↔</span>
       <select style={sel} disabled={running} value={opt.theirs} onChange={e=>set({theirs:e.target.value})}>{CONV_THEIRS.map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
-      <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
-        {CONV_SPEEDS.map(m=><button key={m.id} type="button" disabled={running} onClick={()=>set({fast:m.id==='fast'})} title={m.desc}
-          style={{border:'none',borderRadius:4,padding:'4px 10px',fontSize:'var(--fs-sm2)',fontWeight:(opt.fast?'fast':'acc')===m.id?600:500,background:(opt.fast?'fast':'acc')===m.id?'var(--surface-active)':'transparent',
-            color:(opt.fast?'fast':'acc')===m.id?'var(--text-body)':'var(--text-muted)',cursor:running?'default':'pointer',fontFamily:'inherit'}}>{m.label}</button>)}</span>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
         {CONV_LAYOUTS.map(m=><button key={m.id} type="button" onClick={()=>set({layout:m.id})} title={m.desc}
           style={{border:'none',borderRadius:4,padding:'4px 10px',fontSize:'var(--fs-sm2)',fontWeight:opt.layout===m.id?600:500,background:opt.layout===m.id?'var(--surface-active)':'transparent',
@@ -38033,7 +38031,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v9.6';
+const TB_VERSION='v9.7';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
