@@ -36966,6 +36966,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
     nn.live={parts:s.recParts.map(p=>Math.max(0,Math.round((p.t0-s.t0)/100)/10)),
       segs:s.segs.filter(g=>(g.zh||g.ko).trim()).map(g=>({t:Math.round((g.t||0)*10)/10,ko:(g.ko||'').trim(),zh:(g.zh||g.zhS||'').trim()}))};
     setDb('notes',arr=>[...arr,nn]);LIVE.saved={id:nn.id,audio:links.length};setSaving('');force();
+    window.dispatchEvent(new Event('tb-usage'));
     toast('통역 기록을 저장했습니다'+(links.length?' · 녹음 '+links.length+'개 포함':''));
   };
   const reset=()=>{LIVE.sess=null;LIVE.saved=null;force();};
@@ -37299,6 +37300,7 @@ function ConvView({setDb,toast,onOpenNote}){
     nn.live={parts:s.recParts.map(p=>Math.max(0,Math.round((p.t0-s.t0)/100)/10)),
       segs:segs.map(g=>({t:Math.round((g.t||0)*10)/10,ko:(g.who==='me'?g.zh:g.ko||'').trim(),zh:(g.who==='me'?g.ko||'':g.zh).trim()}))};
     setDb('notes',arr=>[...arr,nn]);CONV.saved={id:nn.id};setSaving('');force();
+    window.dispatchEvent(new Event('tb-usage'));
     toast('대화 기록을 저장했습니다');
   };
   const reset=()=>{CONV.sess=null;CONV.saved=null;force();};
@@ -37999,7 +38001,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v9.1';
+const TB_VERSION='v9.2';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -38808,6 +38810,55 @@ function TbSetup({onRetry}){
 }
 
 /* ── 앱 ── */
+/* ── 머리줄 사용량·요금 — 관리자는 팀 전체, 팀원은 본인 것 (이번 달) ──
+   관리자: tb-admin 'list'의 rows(사람별 기록) · 팀원: 본인 tb_usage. 통역·대화를 멈추면(tb-usage 신호) 다시 읽는다 */
+function TbUsageChip({role,onOpenSettings}){
+  const {Modal,Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const mobile=useMobile();
+  const [rows,setRows]=React.useState(undefined);const [open,setOpen]=React.useState(false);
+  const team=role==='owner';
+  const load=React.useCallback(async()=>{
+    try{await TB.flushClaude();}catch(_){}
+    try{if(team){const d=await TB.admin('list');setRows(d&&d.rows?d.rows:null);}else setRows(await TB.myUsage());}
+    catch(e){console.warn('[통번역] 사용량 읽기 실패',e);setRows(r=>r===undefined?null:r);}
+  },[team]);
+  React.useEffect(()=>{load();const t=setInterval(load,5*60*1000);
+    /* 서버가 통역 사용량을 연결이 닫힐 때 적으므로 조금 기다렸다 읽는다 */
+    const f=()=>setTimeout(load,4000);window.addEventListener('tb-usage',f);
+    return()=>{clearInterval(t);window.removeEventListener('tb-usage',f);};},[load]);
+  if(rows===undefined||rows===null)return null;
+  const A=tbAgg(rows,monthStart(0));
+  const sec=A.live_asr.sec+A.live.sec+A.stt.sec;
+  const label=(team?'팀 ':'내 ')+'이번 달';
+  const tdS={padding:'5px 8px',borderBottom:'1px solid var(--border-default)',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'};
+  /* 관리자: 사람별 */
+  const people=team?Object.entries(rows.reduce((m,r)=>{const k=String(r.email||'?').toLowerCase();(m[k]=m[k]||[]).push(r);return m;},{}))
+    .map(([e,rs])=>({e,o:tbAgg(rs,monthStart(0))})).filter(p=>p.o.total>0||p.o.live.sec||p.o.live_asr.sec||p.o.stt.sec).sort((a,b)=>b.o.total-a.o.total):[];
+  return <>
+    <button type="button" onClick={()=>setOpen(true)} title={label+' 사용량·예상 요금 — 눌러서 자세히'}
+      style={{display:'inline-flex',alignItems:'center',gap:6,border:'1px solid var(--border-default)',borderRadius:6,background:'var(--surface-calc-cell)',
+        padding:mobile?'3px 7px':'3px 10px',fontSize:mobile?11:'var(--fs-sm)',color:'var(--text-body)',cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>
+      <span>{mobile?label+' ':'📊 '+label+' '}{!mobile&&<span style={{color:'var(--text-muted)'}}>{sec?fmtMin(sec)+' · ':''}</span>}<b>{fmtKrw(A.total)}</b></span>
+    </button>
+    <Modal open={open} onClose={()=>setOpen(false)} title={'📊 '+label+' 사용량 · 예상 요금'} width={520}>
+      <div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',fontSize:'var(--fs-sm2)',width:'100%'}}>
+        <thead><tr>{['','사용량','요금'].map((x,i)=><th key={i} style={{textAlign:i?'right':'left',padding:'5px 8px',borderBottom:'1px solid var(--border-strong)'}}>{x}</th>)}</tr></thead>
+        <tbody>{TB_GROUPS.map(g=><tr key={g.id}><td style={{...tdS,whiteSpace:'normal'}}>{g.label}</td>
+          <td style={{...tdS,textAlign:'right'}}>{tbUseText(A[g.id],g.unit)}</td><td style={{...tdS,textAlign:'right'}}>{A[g.id].cost?fmtUsd(A[g.id].cost):'—'}</td></tr>)}
+          <tr style={{fontWeight:600}}><td style={tdS}>합계</td><td style={tdS}></td><td style={{...tdS,textAlign:'right'}}>{fmtUsd(A.total)}<div style={{fontWeight:400,fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{fmtKrw(A.total)}</div></td></tr>
+        </tbody></table></div>
+      {team&&people.length>0&&<div style={{overflowX:'auto',marginTop:12}}><table style={{borderCollapse:'collapse',fontSize:'var(--fs-sm2)',width:'100%'}}>
+        <thead><tr>{['사람','음성','요금'].map((x,i)=><th key={i} style={{textAlign:i?'right':'left',padding:'5px 8px',borderBottom:'1px solid var(--border-strong)'}}>{x}</th>)}</tr></thead>
+        <tbody>{people.map(p=><tr key={p.e}><td style={{...tdS,whiteSpace:'normal',wordBreak:'break-all'}}>{p.e}</td>
+          <td style={{...tdS,textAlign:'right'}}>{fmtMin(p.o.live_asr.sec+p.o.live.sec+p.o.stt.sec)}</td>
+          <td style={{...tdS,textAlign:'right'}}>{fmtUsd(p.o.total)} <span style={{color:'var(--text-label)'}}>{fmtKrw(p.o.total)}</span></td></tr>)}</tbody></table></div>}
+      <TbCostNote/>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:6,marginTop:10}}>
+        <Button variant="ghost" size="sm" onClick={load}>새로고침</Button>
+        {team&&onOpenSettings&&<Button variant="gray" size="sm" onClick={()=>{setOpen(false);onOpenSettings();}}>권한관리에서 지난달 보기</Button>}
+        <Button size="sm" onClick={()=>setOpen(false)}>닫기</Button></div>
+    </Modal></>;
+}
 function TbShell({user,role,onLogout}){
   const NS=window.HDWorkbookDesignSystem_ad60e4;const {AppHeader,Button,Toast,InfoBar}=NS;
   const mobile=useMobile();
@@ -38850,6 +38901,7 @@ function TbShell({user,role,onLogout}){
       fontSize:mobile?13:'var(--fs-md)',fontWeight:tab===t.id?700:500,color:tab===t.id?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit',flex:mobile?1:'none',whiteSpace:'nowrap'}}>{t.label}</button>;
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
     <AppHeader mark="🗣" title="통번역" version={TB_VERSION} tools={<>
+      <TbUsageChip role={role} onOpenSettings={()=>setTab('me')}/>
       {!mobile&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}{role==='owner'?' · 관리자':''}</span>}
       {role==='owner'&&<Button variant={tab==='me'?'secondary':'ghost'} size="xs" onClick={()=>setTab(tab==='me'?'live':'me')} title="설정">⚙ 설정{newModels&&newModels.length?' 🆕':''}</Button>}
       <Button variant="ghost" size="xs" onClick={()=>setPwOpen(true)} title="비밀번호를 정해 두면 메일 없이 로그인">🔑{mobile?'':' 비밀번호'}</Button>
