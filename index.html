@@ -37046,19 +37046,19 @@ Object.assign(window,{modelName,LiveView,LiveSession,LiveConn,liveMerge,pcm16b64
 <script type="text/babel">
 /* ── 대화 (양방향 통역) ───────────────────────────────────────
    마주 앉은 대화나 스피커폰 통화를 양쪽으로 통역한다. 서버(Edge Function livetranslate)는 그대로 쓴다
-   · 소리 → 속도 우선 연결(LiveTranslate)의 받아쓰기만 쓴다 — 이 받아쓰기는 말한 언어를 스스로 알아듣는다
-     (모델이 내놓는 번역은 한쪽 방향뿐이라 쓰지 않는다)
+   · 🎯 정확하게: 받아쓰기 연결(mode=asr)에 from=ko,<상대 언어> 를 보내 서버가 두 언어를 힌트로 준다(v9.6, 서버 함수도
+     쉼표 목록을 받도록 고침). LiveTranslate(qwen3.8)의 받아쓰기는 언어를 못 정해 한국어 말을 일본어 글로 적곤 했다
    · 받아쓴 글자로 누가 말했는지 가린다(한글이면 나, 아니면 상대) → Claude가 반대쪽 언어로 번역
    · 내 말의 번역(상대 언어)은 기기 음성으로 읽어 준다. 읽는 동안은 마이크 대신 무음을 보낸다(자기 목소리 재번역 방지)
    · 상대 말의 번역(한국어)은 기본은 자막만 — 스피커폰이면 소리가 상대에게도 들어가기 때문
    · 누르는 동안만 듣기: 손을 떼면 무음을 보낸다(연결은 그대로 두어 다시 누르면 바로 듣는다)
-   · ⚡ 빠르게: Claude를 거치지 않고 LiveTranslate의 번역을 바로 쓴다. 한 연결은 한 방향만 번역하므로
+   · ⚡ 빠르게: Claude를 거치지 않고 LiveTranslate의 번역을 바로 쓴다(받아쓰기도 LiveTranslate — 언어 힌트는 못 준다). 한 연결은 한 방향만 번역하므로
      같은 소리를 두 연결(→한국어, →상대 언어)에 보낸다(받아쓰기 요금 2배). 상대 말은 →한국어 연결의 번역,
      내 말은 →상대 언어 연결(쌍둥이)의 번역을 시간이 가까운 문장끼리 짝지어 쓴다. 못 찾거나 서버가 번역 언어를
      받지 않으면(번역에 한글이 섞여 오면) 그 문장만 Claude로 번역한다 */
 const CONV_THEIRS=[{id:'zh',label:'중국어',tts:'zh-CN'},{id:'en',label:'영어',tts:'en-US'},{id:'ja',label:'일본어',tts:'ja-JP'}];
 const CONV_TTS={ko:'ko-KR',zh:'zh-CN',en:'en-US',ja:'ja-JP'};
-const CONV_SPEEDS=[{id:'acc',label:'🎯 정확하게',desc:'Claude 번역 · 앞 대화와 용어 힌트를 봄'},{id:'fast',label:'⚡ 빠르게',desc:'LiveTranslate 번역을 바로 · 1~2초 빠름 · 받아쓰기 요금 2배'}];
+const CONV_SPEEDS=[{id:'acc',label:'🎯 정확하게',desc:'받아쓰기에 한국어+상대 언어를 지정 · Claude 번역 · 앞 대화와 용어 힌트를 봄'},{id:'fast',label:'⚡ 빠르게',desc:'LiveTranslate 번역을 바로 · 1~2초 빠름 · 받아쓰기 요금 2배 · 말한 언어 구분이 덜 정확'}];
 const CONV_LAYOUTS=[{id:'call',label:'📞 한 화면',desc:'스피커폰 통화 · 혼자 보기'},{id:'face',label:'🤝 마주 보기',desc:'위쪽은 상대를 향해 뒤집혀 보입니다'}];
 /* 받아쓴 글의 글자로 언어 가리기 */
 function convLang(t){t=String(t||'');const n=re=>(t.match(re)||[]).length;
@@ -37088,8 +37088,10 @@ class ConvConn extends LiveConn{
     const {data}=await Store.sb.auth.getSession();
     const jwt=data&&data.session&&data.session.access_token;
     if(!jwt)throw new Error('로그인 세션이 없습니다 — 다시 로그인하세요');
-    const q=new URLSearchParams({jwt,mode:'live',model:o.model,from:o.from,to:this.to});
-    const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);
+    const asr=o.mode==='asr';
+    const q=new URLSearchParams({jwt,mode:asr?'asr':'live',model:asr?o.asrModel:o.model,from:o.from,to:this.to});
+    if(asr){const hot=String(Store.cfg.sttHint||'').trim();if(hot)q.set('hot',hot.slice(0,1200));}
+    else{const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);}
     if(Store.cfg.liveSil)q.set('sil',String(Store.cfg.liveSil));
     if(Store.cfg.supabaseKey)q.set('apikey',Store.cfg.supabaseKey);
     const url=String(Store.cfg.supabaseUrl||'').replace(/\/+$/,'').replace(/^http/i,'ws')+'/functions/v1/livetranslate?'+q;
@@ -37110,7 +37112,8 @@ class ConvConn extends LiveConn{
       if(t==='response.text.done'||t==='response.audio_transcript.done'){g.m=ev.text||ev.transcript||g.m||'';g.mDone=true;this.ti++;
         this.sess.mdone&&this.sess.mdone(g);return;}
       return;}
-    if(t==='conversation.item.input_audio_transcription.completed'){const i=this.si;super.handle(ev);const g=this.segs[i];if(g)this.sess.turn(g);return;}
+    if(t==='conversation.item.input_audio_transcription.completed'){const g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;this.si++;
+      if(this.sess.err&&this.ready)this.sess.err='';this.sess.bump();this.sess.turn(g);return;}
     super.handle(ev);}
 }
 /* 글자 두 개씩 묶어 겹치는 비율 — 앱이 읽어 준 소리가 다시 들어온 것(메아리)인지 가린다 */
@@ -37146,7 +37149,8 @@ class ConvTwin extends LiveSession{
 }
 
 class ConvSession extends LiveSession{
-  constructor(opt,onChange){super({...opt,mode:'live',from:opt.theirs},onChange);this.speaking=false;this.held=false;this.spkAt=0;}
+  /* 정확하게: 받아쓰기 연결(asr) + 언어 힌트 ko,<상대>. 빠르게: LiveTranslate 연결(live, 받아쓰기는 상대 언어 기준) */
+  constructor(opt,onChange){super({...opt,mode:opt.fast?'live':'asr',from:opt.fast?opt.theirs:'ko,'+opt.theirs},onChange);this.speaking=false;this.held=false;this.spkAt=0;}
   async start(){
     if(claudeMode()==='none')throw new Error('대화 통역은 Claude 번역을 씁니다 — Claude 연결을 먼저 확인하세요');
     await super.start();
@@ -37231,7 +37235,7 @@ class ConvSession extends LiveSession{
     const lines=segs.map(g=>'**'+(g.who==='me'?'나':'상대')+'** '+g.zh.trim()+'\n→ '+((g.ko||'').trim()||'(번역 없음)')).join('\n\n');
     return '# '+title+'\n\n> 💬 양방향 대화 · 한국어 ↔ '+langLabel(this.opt.theirs)+' · 약 '+this.minutes+'분 · '
       +(this.opt.fast?'⚡ 빠르게 ('+modelName(this.opt.model)+' 번역, 일부 '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+')'
-        :modelName(this.opt.model)+' 받아쓰기 + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 번역')+'\n\n'
+        :modelName(this.opt.asrModel)+' 받아쓰기(한국어·'+langLabel(this.opt.theirs)+') + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 번역')+'\n\n'
       +(audioLinks&&audioLinks.length?audioLinks.join('\n')+'\n\n':'')
       +'## 대화\n'+(lines||'(대화 없음)')+'\n';
   }
@@ -37296,7 +37300,7 @@ function ConvView({setDb,toast,onOpenNote}){
     /* 휴대폰 브라우저는 단추를 누른 순간에만 소리를 허락한다 — 빈 소리로 미리 풀어 둔다 */
     try{const ss=window.speechSynthesis;if(ss){ss.cancel();const u=new SpeechSynthesisUtterance(' ');u.volume=0;ss.speak(u);}}catch(_){}
     setWho('auto');
-    const s=new ConvSession({...opt,who:'auto',model:Store.cfg.liveModel||LIVE_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id},force);
+    const s=new ConvSession({...opt,who:'auto',model:Store.cfg.liveModel||LIVE_MODELS[0].id,asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id},force);
     CONV.sess=s;CONV.saved=null;force();
     try{await s.start();}
     catch(e){s.stop(true);s.err=/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message;force();}
@@ -37379,7 +37383,7 @@ function ConvView({setDb,toast,onOpenNote}){
     {hasTts&&!voiceOk&&<InfoBar tone="warn">이 기기에 {theirs.label} 음성이 없습니다 — 휴대폰 설정 › 텍스트 음성 변환(TTS)에서 {theirs.label} 음성을 내려받으면 읽어 줍니다</InfoBar>}
     {sess&&sess.err&&<InfoBar tone="warn">{sess.err}</InfoBar>}
     {sess&&sess.note&&<InfoBar tone="info">{sess.note}</InfoBar>}
-    {theirs.id==='ja'&&running&&who==='auto'&&<InfoBar tone="info">일본어 상대일 때는 받아쓰기가 한국어 말을 일본어 글로 적는 일이 잦습니다. 말하기 전에 <b>🇰🇷 나</b> / <b>일본어 상대</b>를 눌러 주면 정확합니다</InfoBar>}
+    {opt.fast&&running&&who==='auto'&&<InfoBar tone="info">⚡ 빠르게는 받아쓰기가 한국어 말을 {theirs.label} 글로 적는 일이 있습니다. 말하기 전에 <b>🇰🇷 나</b> / <b>{theirs.label} 상대</b>를 눌러 주면 정확합니다(🎯 정확하게는 두 언어를 미리 알려 줍니다)</InfoBar>}
     {opt.fast&&!running&&!sess&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:6}}>⚡ 빠르게: 번역이 1~2초 빨라지는 대신 받아쓰기 요금이 2배(1시간 약 ₩1,300)이고, 숫자·전문용어 정확도가 조금 떨어질 수 있습니다</div>}
     {saving&&<InfoBar tone="info">{saving}</InfoBar>}
     {CONV.saved&&!running&&<div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-sm2)'}}>
@@ -38029,7 +38033,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v9.5';
+const TB_VERSION='v9.6';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
