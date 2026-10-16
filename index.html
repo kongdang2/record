@@ -38042,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.3';
+const TB_VERSION='v10.4';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -38381,7 +38381,7 @@ function TbPwModal({open,onClose,toast}){
     if(a.length<8){setErr('8자 이상으로 정하세요');return;}
     if(a!==b){setErr('두 칸이 서로 다릅니다');return;}
     setBusy(true);setErr('');
-    const {error}=await Store.sb.auth.updateUser({password:a});
+    const {error}=await Store.sb.auth.updateUser({password:a,data:{tb_initial_pw:false}}); /* 관리자가 정한 초기 비번 표시를 지운다 */
     setBusy(false);
     if(error){setErr(/same password/i.test(error.message)?'지금 비밀번호와 같습니다':/weak|short|characters/i.test(error.message)?'더 복잡한 비밀번호로 정하세요':explainSbError(error));return;}
     try{localStorage.setItem('tb.usePw','1');}catch(_){}
@@ -38866,7 +38866,7 @@ function TbTeam({toast}){
       {data&&<div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',width:'100%',minWidth:820}}>
         <thead><tr><th style={th}>이메일</th><th style={th}>역할</th><th style={th}>이번 달 통역</th><th style={th}>이번 달 전사</th><th style={th}>이번 달 요금</th><th style={th}>지난달 통역·전사</th><th style={th}>지난달 요금</th><th style={th}></th></tr></thead>
         <tbody>{(data.members||[]).map(m=>{const a=u(m,'thisMonth'),b=u(m,'lastMonth');return <tr key={m.email}>
-          <td style={td}>{m.email}{m.banned&&<span style={{color:'var(--color-danger)',marginLeft:6}}>차단됨</span>}{m.lastSignIn?null:<span style={{color:'var(--text-label)',marginLeft:6}}>· 아직 로그인 안 함</span>}</td>
+          <td style={td}>{m.email}{m.banned&&<span style={{color:'var(--color-danger)',marginLeft:6}}>차단됨</span>}{!m.lastSignIn?<span style={{color:'var(--text-label)',marginLeft:6}}>· 아직 로그인 안 함</span>:m.initialPw===true?<span style={{color:'#B45309',marginLeft:6}}>· 초기 비번 그대로</span>:m.initialPw===false?<span style={{color:'var(--text-label)',marginLeft:6}}>· 본인 비번 설정함</span>:null}</td>
           <td style={td}>{m.role==='owner'?'관리자':'팀원'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.live?fmtMin(a.live):'—'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.stt?fmtMin(a.stt):'—'}{a.polish?' · 정리 '+a.polish+'건':''}</td>
@@ -38992,6 +38992,9 @@ function TbShell({user,role,onLogout}){
   /* 링크로 처음 들어온 사람에게 비밀번호 정하기를 한 번 권한다 */
   const [pwHint,setPwHint]=React.useState(()=>{try{return localStorage.getItem('tb.usePw')!=='1'&&localStorage.getItem('tb.pwHint')!=='x';}catch(_){return false;}});
   const dismissPwHint=()=>{setPwHint(false);try{localStorage.setItem('tb.pwHint','x');}catch(_){}};
+  /* 관리자가 정해 준 초기 비밀번호로 들어온 사람에게는 바꾸라고 계속 알린다 (user_metadata.tb_initial_pw) */
+  const [initPw,setInitPw]=React.useState(false);
+  React.useEffect(()=>{if(!Store.sb||!Store.sb.auth.getUser)return;Store.sb.auth.getUser().then(({data})=>{const u=data&&data.user;setInitPw(!!(u&&u.user_metadata&&u.user_metadata.tb_initial_pw===true));}).catch(()=>{});},[]);
   /* 관리자: 하루 한 번 새 모델 확인 → 있으면 알림 */
   React.useEffect(()=>{if(role!=='owner')return;let last=0;try{last=Number(localStorage.getItem('tb.modelCheck')||0);}catch(_){}
     if(Date.now()-last<20*3600e3)return;
@@ -39006,11 +39009,13 @@ function TbShell({user,role,onLogout}){
       {role==='owner'&&<Button variant={tab==='me'?'secondary':'ghost'} size="xs" onClick={()=>setTab(tab==='me'?'live':'me')} title="설정">⚙ 설정{newModels&&newModels.length?' 🆕':''}</Button>}
       <Button variant="ghost" size="xs" onClick={()=>setPwOpen(true)} title="비밀번호를 정해 두면 메일 없이 로그인">🔑{mobile?'':' 비밀번호'}</Button>
       <Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
-    <TbPwModal open={pwOpen} onClose={()=>{setPwOpen(false);}} toast={m=>{toast(m);dismissPwHint();}}/>
+    <TbPwModal open={pwOpen} onClose={()=>{setPwOpen(false);}} toast={m=>{toast(m);dismissPwHint();setInitPw(false);}}/>
     <nav style={{display:'flex',gap:mobile?0:4,borderBottom:'1px solid var(--border-default)',padding:mobile?'0 4px':'0 16px',background:'#fff',position:'sticky',top:'env(safe-area-inset-top, 0px)',zIndex:20}}>{tabs.map(tabBtn)}</nav>
     <main style={{flex:1,minWidth:0,padding:mobile?'10px 10px 24px':'16px 20px'}}>
       {loadErr&&<InfoBar tone="warn">기록을 불러오지 못했습니다 — {loadErr}</InfoBar>}
-      {pwHint&&tab!=='me'&&<div style={{marginBottom:10}}><InfoBar>🔑 비밀번호를 정해 두면 다음부터 로그인 메일 없이 바로 들어올 수 있습니다.
+      {initPw&&<div style={{marginBottom:10}}><InfoBar>🔑 관리자가 정해 준 초기 비밀번호로 로그인했습니다. 본인만 아는 비밀번호로 바꿔 주세요.
+        <button type="button" onClick={()=>setPwOpen(true)} style={{marginLeft:8,border:'none',background:'none',color:'var(--color-accent, #2563eb)',cursor:'pointer',fontSize:'inherit',fontFamily:'inherit',textDecoration:'underline'}}>지금 바꾸기</button></InfoBar></div>}
+      {!initPw&&pwHint&&tab!=='me'&&<div style={{marginBottom:10}}><InfoBar>🔑 비밀번호를 정해 두면 다음부터 로그인 메일 없이 바로 들어올 수 있습니다.
         <button type="button" onClick={()=>setPwOpen(true)} style={{marginLeft:8,border:'none',background:'none',color:'var(--color-accent, #2563eb)',cursor:'pointer',fontSize:'inherit',fontFamily:'inherit',textDecoration:'underline'}}>지금 정하기</button>
         <button type="button" onClick={dismissPwHint} style={{marginLeft:8,border:'none',background:'none',color:'var(--text-label)',cursor:'pointer',fontSize:'inherit',fontFamily:'inherit'}}>나중에</button></InfoBar></div>}
       {role==='owner'&&newModels&&newModels.length>0&&tab!=='me'&&<div style={{marginBottom:10}}><InfoBar>🆕 새 모델 {newModels.length}개가 나왔습니다 — {newModels.map(n=>n.label).slice(0,3).join(', ')}{newModels.length>3?' 등':''}
