@@ -38042,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.4';
+const TB_VERSION='v10.5';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -38303,8 +38303,10 @@ const TB={
   },
   async admin(action,body={}){
     const {data,error}=await Store.sb.functions.invoke('tb-admin',{body:{action,...body}});
-    if(error){let d='';try{const j=await error.context?.json();d=j&&j.error;}catch(_){}
+    if(error){let d='',k='';try{const j=await error.context?.json();d=j&&j.error;k=j&&j.kind;}catch(_){}
+      if(k==='confirm'||error.context?.status===409){const x=new Error(d||'확인이 필요합니다');x.confirm=true;throw x;}
       throw new Error(d||(/Failed to send|FunctionsFetchError/i.test(error.message)?"Edge Function 'tb-admin'을 찾지 못했습니다 — 대시보드에 tb-admin 이름으로 배포하세요":error.message));}
+    if(data&&data.kind==='confirm'){const x=new Error(data.error||'확인이 필요합니다');x.confirm=true;throw x;}
     if(data&&data.error)throw new Error(data.error);
     return data;
   },
@@ -38829,8 +38831,13 @@ function TbTeam({toast}){
       else setLink({email:e,url:r.link,kind:r.kind});
       setEmail('');setPw('');await load();}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const setPass=async e=>{if(!pw2||pwBad(pw2)){toast('비밀번호는 8자 이상으로 정하세요');return;}
-    if(!confirm(e+' 비밀번호를 새로 정합니다.\n팀원이 쓰던 비밀번호로는 더 이상 로그인할 수 없습니다. 계속할까요?'))return;
-    setBusy(true);try{await TB.admin('setpw',{email:e,password:pw2});setPwFor('');setPw2('');setMade(e);toast(e+' 비밀번호를 바꿨습니다');}
+    const mm=((data&&data.members)||[]).find(x=>x.email===e);
+    const warn='⚠ '+e+' 은(는) 이미 로그인해서 쓰고 있는 계정입니다.\n재설정하면 팀원이 정한 비밀번호로는 더 이상 로그인할 수 없습니다.\n비밀번호를 잊은 경우에만 계속하세요. 재설정할까요?';
+    let force=false;if(mm&&mm.lastSignIn){if(!confirm(warn))return;force=true;}
+    setBusy(true);try{
+      /* 서버도 이미 쓰는 계정이면 force 없이는 바꾸지 않는다(409 confirm) */
+      try{await TB.admin('setpw',force?{email:e,password:pw2,force:true}:{email:e,password:pw2});}
+      catch(x){if(!x.confirm||force||!confirm(warn))throw x;await TB.admin('setpw',{email:e,password:pw2,force:true});}setPwFor('');setPw2('');setMade(e);toast(e+' 비밀번호를 바꿨습니다');}
     catch(x){toast('⚠ '+(/unknown|알 수 없는|지원|action/i.test(x.message)?'서버 함수(tb-admin)를 새 코드로 배포해야 합니다 — ':'')+x.message);}setBusy(false);};
   const mkLink=async e=>{setBusy(true);try{const r=await TB.admin('link',{email:e,redirectTo});setLink({email:e,url:r.link,kind:r.kind});}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const remove=async e=>{setBusy(true);try{await TB.admin('remove',{email:e});setDel('');await load();toast(e+' 을(를) 명단에서 뺐습니다');}catch(x){toast('⚠ '+x.message);}setBusy(false);};
@@ -38879,7 +38886,7 @@ function TbTeam({toast}){
               ?<span style={{display:'inline-flex',gap:4,alignItems:'center'}}><input type="text" autoComplete="off" autoFocus placeholder="새 비밀번호 8자 이상" value={pw2} onChange={e=>setPw2(e.target.value)}
                   onKeyDown={e=>{if(e.key==='Enter')setPass(m.email);if(e.key==='Escape'){setPwFor('');setPw2('');}}} style={{...inputStyle,width:150,padding:'3px 6px',fontSize:'var(--fs-sm)'}}/>
                 <Button size="xs" disabled={busy} onClick={()=>setPass(m.email)}>저장</Button><Button variant="ghost" size="xs" onClick={()=>{setPwFor('');setPw2('');}}>취소</Button></span>
-              :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>{setPwFor(m.email);setPw2('');}} title="비밀번호를 잊었을 때 관리자가 새로 정해 줍니다">비밀번호 지정</Button>}
+              :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>{setPwFor(m.email);setPw2('');}} title={m.lastSignIn?'이미 쓰고 있는 계정 — 비밀번호를 잊었을 때만 재설정하세요':'처음 로그인할 비밀번호를 정해 줍니다'}>{m.lastSignIn?'비밀번호 재설정':'비밀번호 지정'}</Button>}
             {del===m.email?<><Button variant="danger" size="xs" disabled={busy} onClick={()=>remove(m.email)}>빼기 확인</Button><Button variant="ghost" size="xs" onClick={()=>setDel('')}>취소</Button></>
               :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>setDel(m.email)}>명단에서 빼기</Button>}</>}</td>
         </tr>;})}
