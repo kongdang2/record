@@ -38042,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.2';
+const TB_VERSION='v10.3';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -38824,10 +38824,12 @@ function TbTeam({toast}){
     setBusy(true);setMade('');setLink(null);
     try{const r=await TB.admin('add',pw?{email:e,redirectTo,password:pw}:{email:e,redirectTo});
       if(pw){if(r&&r.link){setLink({email:e,url:r.link,kind:r.kind});toast('⚠ 서버 함수가 아직 초기 비밀번호를 지원하지 않아 링크를 만들었습니다');}
+        else if(r&&(r.kind==='existing'||r.passwordUnchanged||r.password_unchanged))toast(e+' — 이미 사용 중인 계정이라 비밀번호는 바꾸지 않고 명단에만 넣었습니다');
         else setMade(e);}
       else setLink({email:e,url:r.link,kind:r.kind});
       setEmail('');setPw('');await load();}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const setPass=async e=>{if(!pw2||pwBad(pw2)){toast('비밀번호는 8자 이상으로 정하세요');return;}
+    if(!confirm(e+' 비밀번호를 새로 정합니다.\n팀원이 쓰던 비밀번호로는 더 이상 로그인할 수 없습니다. 계속할까요?'))return;
     setBusy(true);try{await TB.admin('setpw',{email:e,password:pw2});setPwFor('');setPw2('');setMade(e);toast(e+' 비밀번호를 바꿨습니다');}
     catch(x){toast('⚠ '+(/unknown|지원|action/i.test(x.message)?'서버 함수(tb-admin)를 새 코드로 배포해야 합니다 — ':'')+x.message);}setBusy(false);};
   const mkLink=async e=>{setBusy(true);try{const r=await TB.admin('link',{email:e,redirectTo});setLink({email:e,url:r.link,kind:r.kind});}catch(x){toast('⚠ '+x.message);}setBusy(false);};
