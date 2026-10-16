@@ -38831,7 +38831,7 @@ function TbTeam({toast}){
   const setPass=async e=>{if(!pw2||pwBad(pw2)){toast('비밀번호는 8자 이상으로 정하세요');return;}
     if(!confirm(e+' 비밀번호를 새로 정합니다.\n팀원이 쓰던 비밀번호로는 더 이상 로그인할 수 없습니다. 계속할까요?'))return;
     setBusy(true);try{await TB.admin('setpw',{email:e,password:pw2});setPwFor('');setPw2('');setMade(e);toast(e+' 비밀번호를 바꿨습니다');}
-    catch(x){toast('⚠ '+(/unknown|지원|action/i.test(x.message)?'서버 함수(tb-admin)를 새 코드로 배포해야 합니다 — ':'')+x.message);}setBusy(false);};
+    catch(x){toast('⚠ '+(/unknown|알 수 없는|지원|action/i.test(x.message)?'서버 함수(tb-admin)를 새 코드로 배포해야 합니다 — ':'')+x.message);}setBusy(false);};
   const mkLink=async e=>{setBusy(true);try{const r=await TB.admin('link',{email:e,redirectTo});setLink({email:e,url:r.link,kind:r.kind});}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const remove=async e=>{setBusy(true);try{await TB.admin('remove',{email:e});setDel('');await load();toast(e+' 을(를) 명단에서 뺐습니다');}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const copy=async t=>{try{await navigator.clipboard.writeText(t);toast('복사했습니다');}catch(_){const el=document.getElementById('tbLink');if(el){el.focus();el.select();}toast('선택된 링크를 Ctrl+C로 복사하세요');}};
