@@ -38042,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.5';
+const TB_VERSION='v10.6';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -38436,7 +38436,6 @@ function TbLogin({onLogin,note}){
         <button type="button" onClick={()=>{setUsePw(!usePw);setErr('');}} style={{marginTop:12,border:'none',background:'none',color:'var(--text-muted)',fontSize:'var(--fs-sm2)',cursor:'pointer',padding:0}}>
           {usePw?'← 로그인 링크로 받기 (메일)':'비밀번호로 로그인'}</button>
         {!usePw&&<div style={{marginTop:8,fontSize:'var(--fs-sm)',color:'var(--text-label)',lineHeight:1.5}}>로그인 메일은 한 시간에 몇 통만 보낼 수 있습니다. 비밀번호를 정해 두면(로그인 후 머리줄 🔑) 메일 없이 바로 들어옵니다.</div>}</>}
-      <div style={{marginTop:18,fontSize:'var(--fs-sm)',color:'var(--text-label)',lineHeight:1.6}}>등록된 팀원만 쓸 수 있습니다. 녹음은 Alibaba(싱가포르), 글은 Anthropic(Claude)에서 처리됩니다.</div>
     </div>
   </div>;
 }
@@ -38816,7 +38815,8 @@ function TbTeam({toast}){
   const [data,setData]=React.useState(null);const [err,setErr]=React.useState('');const [email,setEmail]=React.useState('');
   const [busy,setBusy]=React.useState(false);const [link,setLink]=React.useState(null);const [del,setDel]=React.useState('');
   /* 초기 비밀번호 — 넣으면 링크 대신 이메일+비밀번호 계정을 바로 만든다(메일 발송 없음) */
-  const [pw,setPw]=React.useState('');const [pwFor,setPwFor]=React.useState('');const [pw2,setPw2]=React.useState('');const [made,setMade]=React.useState('');
+  const TB_DEF_PW='11111111'; /* 기본 초기 비밀번호 (v10.6) */
+  const [pw,setPw]=React.useState(TB_DEF_PW);const [pwFor,setPwFor]=React.useState('');const [pw2,setPw2]=React.useState('');const [made,setMade]=React.useState('');
   const redirectTo=location.origin+location.pathname;
   const pwBad=p=>p&&p.length<8;
   const load=async()=>{setErr('');try{setData(await TB.admin('list'));}catch(e){setErr(e.message);}};
@@ -38829,16 +38829,11 @@ function TbTeam({toast}){
         else if(r&&(r.kind==='existing'||r.passwordUnchanged||r.password_unchanged))toast(e+' — 이미 사용 중인 계정이라 비밀번호는 바꾸지 않고 명단에만 넣었습니다');
         else setMade(e);}
       else setLink({email:e,url:r.link,kind:r.kind});
-      setEmail('');setPw('');await load();}catch(x){toast('⚠ '+x.message);}setBusy(false);};
+      setEmail('');setPw(TB_DEF_PW);await load();}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const setPass=async e=>{if(!pw2||pwBad(pw2)){toast('비밀번호는 8자 이상으로 정하세요');return;}
-    const mm=((data&&data.members)||[]).find(x=>x.email===e);
-    const warn='⚠ '+e+' 은(는) 이미 로그인해서 쓰고 있는 계정입니다.\n'+(mm&&mm.initialPw===false?'팀원이 직접 정한 비밀번호가 있습니다. ':'팀원이 비밀번호를 정했는지 기록이 없습니다(정했을 수 있음). ')+'재설정하면 팀원이 정한 비밀번호로는 더 이상 로그인할 수 없습니다.\n비밀번호를 잊은 경우에만 계속하세요. 재설정할까요?';
-    let force=false;if(mm&&mm.lastSignIn&&mm.initialPw!==true){if(!confirm(warn))return;force=true;}
-    setBusy(true);try{
-      /* 서버도 이미 쓰는 계정이면 force 없이는 바꾸지 않는다(409 confirm) */
-      try{await TB.admin('setpw',force?{email:e,password:pw2,force:true}:{email:e,password:pw2});}
-      catch(x){if(!x.confirm||force||!confirm(warn))throw x;await TB.admin('setpw',{email:e,password:pw2,force:true});}setPwFor('');setPw2('');setMade(e);toast(e+' 비밀번호를 바꿨습니다');}
-    catch(x){toast('⚠ '+(/unknown|알 수 없는|지원|action/i.test(x.message)?'서버 함수(tb-admin)를 새 코드로 배포해야 합니다 — ':'')+x.message);}setBusy(false);};
+    if(!confirm(e+' 비밀번호를 '+pw2+' (으)로 바꿉니다.\n팀원이 쓰던 비밀번호로는 더 이상 로그인할 수 없습니다. 계속할까요?'))return;
+    setBusy(true);try{await TB.admin('setpw',{email:e,password:pw2,force:true});setPwFor('');setPw2('');setMade(e);toast(e+' 비밀번호를 바꿨습니다');}
+    catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const mkLink=async e=>{setBusy(true);try{const r=await TB.admin('link',{email:e,redirectTo});setLink({email:e,url:r.link,kind:r.kind});}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const remove=async e=>{setBusy(true);try{await TB.admin('remove',{email:e});setDel('');await load();toast(e+' 을(를) 명단에서 뺐습니다');}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const copy=async t=>{try{await navigator.clipboard.writeText(t);toast('복사했습니다');}catch(_){const el=document.getElementById('tbLink');if(el){el.focus();el.select();}toast('선택된 링크를 Ctrl+C로 복사하세요');}};
@@ -38857,9 +38852,9 @@ function TbTeam({toast}){
       {err&&<InfoBar tone="warn">{err}</InfoBar>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
         <input id="tbAddEmail" type="email" placeholder="추가할 팀원 이메일" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')add();}} style={{...inputStyle,flex:'1 1 240px',maxWidth:340}}/>
-        <input id="tbAddPw" type="text" autoComplete="off" placeholder="초기 비밀번호 (8자 이상, 비우면 링크)" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')add();}}
+        <input id="tbAddPw" type="text" autoComplete="off" placeholder="초기 비밀번호 (기본 11111111)" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')add();}}
           style={{...inputStyle,flex:'1 1 200px',maxWidth:260,borderColor:pwBad(pw)?'var(--color-danger)':undefined}}/>
-        <Button disabled={busy} onClick={add}>{pw?'+ 추가 (이메일+비밀번호)':'+ 추가하고 초대 링크 만들기'}</Button>
+        <Button disabled={busy} onClick={add}>{pw?'+ 추가':'+ 추가하고 초대 링크 만들기'}</Button>
       </div>
       {made&&<div style={{padding:'10px 12px',background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:4,marginBottom:10,fontSize:'var(--fs-sm2)',lineHeight:1.6}}>
         ✓ <b>{made}</b> 계정에 비밀번호를 정했습니다. 이메일과 비밀번호를 본인에게 직접 알려 주세요(메일은 가지 않습니다).
@@ -38873,7 +38868,7 @@ function TbTeam({toast}){
       {data&&<div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',width:'100%',minWidth:820}}>
         <thead><tr><th style={th}>이메일</th><th style={th}>역할</th><th style={th}>이번 달 통역</th><th style={th}>이번 달 전사</th><th style={th}>이번 달 요금</th><th style={th}>지난달 통역·전사</th><th style={th}>지난달 요금</th><th style={th}></th></tr></thead>
         <tbody>{(data.members||[]).map(m=>{const a=u(m,'thisMonth'),b=u(m,'lastMonth');return <tr key={m.email}>
-          <td style={td}>{m.email}{m.banned&&<span style={{color:'var(--color-danger)',marginLeft:6}}>차단됨</span>}{!m.lastSignIn?<span style={{color:'var(--text-label)',marginLeft:6}}>· 아직 로그인 안 함</span>:m.initialPw===true?<span style={{color:'#B45309',marginLeft:6}}>· 초기 비번 그대로</span>:m.initialPw===false?<span style={{color:'var(--text-label)',marginLeft:6}}>· 본인 비번 설정함</span>:<span style={{color:'var(--text-label)',marginLeft:6}} title='링크로 들어왔거나 2026-10-16 이전에 비밀번호를 정해 기록이 없습니다. 본인이 🔑로 한 번 다시 저장하면 표시됩니다'>· 비번 기록 없음</span>}</td>
+          <td style={td}>{m.email}{m.banned&&<span style={{color:'var(--color-danger)',marginLeft:6}}>차단됨</span>}</td>
           <td style={td}>{m.role==='owner'?'관리자':'팀원'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.live?fmtMin(a.live):'—'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.stt?fmtMin(a.stt):'—'}{a.polish?' · 정리 '+a.polish+'건':''}</td>
@@ -38886,7 +38881,7 @@ function TbTeam({toast}){
               ?<span style={{display:'inline-flex',gap:4,alignItems:'center'}}><input type="text" autoComplete="off" autoFocus placeholder="새 비밀번호 8자 이상" value={pw2} onChange={e=>setPw2(e.target.value)}
                   onKeyDown={e=>{if(e.key==='Enter')setPass(m.email);if(e.key==='Escape'){setPwFor('');setPw2('');}}} style={{...inputStyle,width:150,padding:'3px 6px',fontSize:'var(--fs-sm)'}}/>
                 <Button size="xs" disabled={busy} onClick={()=>setPass(m.email)}>저장</Button><Button variant="ghost" size="xs" onClick={()=>{setPwFor('');setPw2('');}}>취소</Button></span>
-              :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>{setPwFor(m.email);setPw2('');}} title={m.lastSignIn&&m.initialPw!==true?'이미 쓰고 있는 계정 — 비밀번호를 잊었을 때만 재설정하세요':'처음 로그인할 비밀번호를 정해 줍니다'}>{m.lastSignIn&&m.initialPw!==true?'비밀번호 재설정':'비밀번호 지정'}</Button>}
+              :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>{setPwFor(m.email);setPw2(TB_DEF_PW);}} title="링크가 만료됐거나 비밀번호를 잊었을 때 새로 정해 줍니다">비밀번호 재설정</Button>}
             {del===m.email?<><Button variant="danger" size="xs" disabled={busy} onClick={()=>remove(m.email)}>빼기 확인</Button><Button variant="ghost" size="xs" onClick={()=>setDel('')}>취소</Button></>
               :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>setDel(m.email)}>명단에서 빼기</Button>}</>}</td>
         </tr>;})}
@@ -38896,7 +38891,7 @@ function TbTeam({toast}){
         </tbody></table></div>}
       {data&&!data.rows&&<InfoBar tone="warn">요금을 보려면 tb-admin 함수를 새 코드로 다시 배포하세요</InfoBar>}
       {data&&data.rows&&<TbCostNote/>}
-      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:8,lineHeight:1.6}}>초기 비밀번호를 넣고 추가하면 메일 없이 이메일+비밀번호로 바로 로그인할 수 있습니다(비우면 예전처럼 링크). 비밀번호를 잊은 팀원은 「비밀번호 지정」으로 새로 정해 주세요. 명단에서 빼면 그 계정은 바로 로그인이 막히고(기록은 남음), 다시 추가하면 풀립니다. 비용은 모두 관리자 계정으로 청구됩니다. 한도는 없고 사용 시간만 기록합니다.</div>
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:8,lineHeight:1.6}}>새 팀원은 기본 초기 비밀번호 11111111로 추가되고, 메일 없이 이메일+비밀번호로 바로 로그인합니다(이미 쓰던 계정은 비밀번호를 바꾸지 않음). 링크가 만료됐거나 비밀번호를 잊은 팀원은 「비밀번호 재설정」으로 다시 정해 주세요. 명단에서 빼면 그 계정은 바로 로그인이 막히고(기록은 남음), 다시 추가하면 풀립니다. 비용은 모두 관리자 계정으로 청구됩니다. 한도는 없고 사용 시간만 기록합니다.</div>
     </Card>
   </div>;
 }
@@ -39001,7 +38996,7 @@ function TbShell({user,role,onLogout}){
   const dismissPwHint=()=>{setPwHint(false);try{localStorage.setItem('tb.pwHint','x');}catch(_){}};
   /* 관리자가 정해 준 초기 비밀번호로 들어온 사람에게는 바꾸라고 계속 알린다 (user_metadata.tb_initial_pw) */
   const [initPw,setInitPw]=React.useState(false);
-  React.useEffect(()=>{if(!Store.sb||!Store.sb.auth.getUser)return;Store.sb.auth.getUser().then(({data})=>{const u=data&&data.user;setInitPw(!!(u&&u.user_metadata&&u.user_metadata.tb_initial_pw===true));}).catch(()=>{});},[]);
+  React.useEffect(()=>{if(!Store.sb||!Store.sb.auth.getUser)return;Store.sb.auth.getUser().then(({data})=>{const u=data&&data.user;const f=!!(u&&u.user_metadata&&u.user_metadata.tb_initial_pw===true);setInitPw(f);if(f)setPwOpen(true); /* 초기 비번(11111111 등)이면 바로 바꾸기 창 */}).catch(()=>{});},[]);
   /* 관리자: 하루 한 번 새 모델 확인 → 있으면 알림 */
   React.useEffect(()=>{if(role!=='owner')return;let last=0;try{last=Number(localStorage.getItem('tb.modelCheck')||0);}catch(_){}
     if(Date.now()-last<20*3600e3)return;
