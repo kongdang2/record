@@ -38042,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.0';
+const TB_VERSION='v10.1';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -38234,6 +38234,14 @@ const TB={
     await TB.dropFiles(rec?tbRecPaths(rec):[]);
     const {error}=await Store.sb.from('pms_items').delete().eq('user_id',Store.user.id).eq('kind',TB_KIND).eq('item_id',id);
     if(error)throw new Error(explainSbError(error));
+  },
+  /* 여러 기록 한꺼번에 영구 삭제 — 녹음 파일까지. 100개씩 나눠 지운다 */
+  async removeMany(recs){
+    await TB.dropFiles(recs.flatMap(r=>tbRecPaths(r)));
+    const ids=recs.map(r=>r.id);
+    for(let i=0;i<ids.length;i+=100){
+      const {error}=await Store.sb.from('pms_items').delete().eq('user_id',Store.user.id).eq('kind',TB_KIND).in('item_id',ids.slice(i,i+100));
+      if(error)throw new Error(explainSbError(error));}
   },
   async dropFiles(paths){
     const mine=paths.filter(p=>p.startsWith(Store.user.id+'/'));
@@ -38510,12 +38518,15 @@ function TbAudioSet({refs,live}){
 const TB_JOBS=new Set();
 
 /* ── 녹취록 ── */
-function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
+function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,clearAuto}){
   const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
   const mobile=useMobile();
   const cur=recs.find(r=>r.id===sel)||null;
   const [busy,setBusy]=React.useState('');const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
   const [q,setQ]=React.useState('');const [confirmDel,setConfirmDel]=React.useState(false);
+  /* 체크박스로 여러 개 골라 지우기 */
+  const [pick,setPick]=React.useState(()=>new Set());const [askMany,setAskMany]=React.useState(false);const [delBusy,setDelBusy]=React.useState(false);
+  const togPick=id=>{setAskMany(false);setPick(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});};
   const local=React.useRef({});   /* 올리지 않은 큰 파일은 이 창에서만 들고 있다 */
   React.useEffect(()=>{setEdit(false);setConfirmDel(false);},[sel]);
   React.useEffect(()=>{if(autoStt&&cur&&cur.id===autoStt&&!busy){clearAuto();runTidy(cur);}},[autoStt,cur&&cur.id]);
@@ -38527,6 +38538,7 @@ function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
     return runPolish(rec);
   };
   const list=recs.filter(r=>!q||(r.title+' '+r.md).toLowerCase().includes(q.toLowerCase()));
+  const picked=recs.filter(r=>pick.has(r.id));const pickN=picked.length;const pickFiles=picked.reduce((n,r)=>n+tbRecPaths(r).length,0);
 
   /* 받아쓰기 → 정리·번역 */
   const runStt=async(rec0)=>{
@@ -38598,16 +38610,33 @@ function TbRecords({recs,sel,setSel,upd,remove,addRec,toast,autoStt,clearAuto}){
 
   const listPane=<div style={{borderRight:mobile?'none':'1px solid var(--border-default)',minWidth:0,display:mobile&&cur?'none':'block'}}>
     <div style={{padding:8,borderBottom:'1px solid var(--border-default)'}}>
-      <input id="tbSearch" placeholder="기록 검색" value={q} onChange={e=>setQ(e.target.value)} style={{...inputStyle,padding:'6px 8px'}}/></div>
-    <div style={{maxHeight:mobile?'none':'calc(100vh - 250px)',overflowY:'auto'}}>
+      <input id="tbSearch" placeholder="기록 검색" value={q} onChange={e=>setQ(e.target.value)} style={{...inputStyle,padding:'6px 8px'}}/>
+      {list.length>0&&<div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginTop:6,fontSize:'var(--fs-sm2)'}}>
+        <label style={{display:'inline-flex',alignItems:'center',gap:4,cursor:'pointer',color:'var(--text-muted)'}}>
+          <input type="checkbox" aria-label="보이는 기록 모두 선택" checked={list.length>0&&list.every(r=>pick.has(r.id))}
+            onChange={e=>{setAskMany(false);const on=e.target.checked;setPick(p=>{const n=new Set(p);list.forEach(r=>on?n.add(r.id):n.delete(r.id));return n;});}}/>
+          {pickN?pickN+'개 선택':'전체 선택'}</label>
+        {pickN>0&&(askMany
+          ?<span style={{display:'inline-flex',gap:4,alignItems:'center',flexWrap:'wrap'}}>{pickN}개{pickFiles?'(녹음 '+pickFiles+'개 포함)':''} 영구 삭제할까요? (되돌릴 수 없음)
+            <Button variant="danger" size="sm" disabled={delBusy} onClick={async()=>{setDelBusy(true);
+              try{await removeMany([...pick].filter(id=>recs.some(r=>r.id===id)));setPick(new Set());setAskMany(false);}catch(_){}setDelBusy(false);}}>{delBusy?'삭제 중…':'삭제'}</Button>
+            <Button variant="ghost" size="sm" disabled={delBusy} onClick={()=>setAskMany(false)}>취소</Button></span>
+          :<><Button variant="danger" size="sm" onClick={()=>setAskMany(true)}>🗑 선택 삭제</Button>
+            <Button variant="ghost" size="sm" onClick={()=>setPick(new Set())}>선택 해제</Button></>)}
+      </div>}</div>
+    <div style={{maxHeight:mobile?'none':'calc(100vh - 280px)',overflowY:'auto'}}>
       {!list.length&&<div style={{padding:'24px 12px',color:'var(--text-label)',fontSize:'var(--fs-sm2)',lineHeight:1.7}}>{recs.length?'검색 결과가 없습니다':<>아직 기록이 없습니다.<br/>위의 <b>🎙 음성 파일 전사</b>로 녹음을 올리거나, 🗣 통역을 멈추면 여기에 쌓입니다.</>}</div>}
       {list.map(r=>{const on=r.id===sel;const tags=r.tags||[];
         const st=/##\s*정리·번역/.test(r.md)?'정리됨':/##\s*녹취/.test(r.md)?'전사됨':tags.includes('통역')?'자막만':'녹음만';
         return <div key={r.id} role="button" tabIndex={0} onClick={()=>setSel(r.id)} onKeyDown={e=>{if(e.key==='Enter')setSel(r.id);}}
-          style={{padding:'9px 12px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',background:on?'var(--surface-active)':'transparent'}}>
+          style={{padding:'9px 12px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',background:pick.has(r.id)?'#FEF2F2':on?'var(--surface-active)':'transparent',display:'flex',gap:8,alignItems:'flex-start'}}>
+          <input type="checkbox" className="tb-pick" aria-label={r.title+' 선택'} checked={pick.has(r.id)} onClick={e=>e.stopPropagation()} onChange={()=>togPick(r.id)}
+            style={{marginTop:4,width:16,height:16,flex:'none',cursor:'pointer'}}/>
+          <div style={{minWidth:0,flex:1}}>
           <div style={{fontWeight:600,fontSize:'var(--fs-md)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{tags.includes('통역')?'🗣 ':'🎙 '}{r.title}</div>
           <div style={{display:'flex',gap:8,fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:2}}>
             <span style={{fontFamily:'var(--font-num)'}}>{String(r.created||'').slice(0,10)||r.updated}</span><span>{st}</span></div>
+          </div>
         </div>;})}
     </div>
   </div>;
@@ -38921,6 +38950,11 @@ function TbShell({user,role,onLogout}){
   const upd=(id,patch)=>{const next=recsRef.current.map(r=>r.id===id?{...r,...patch,updated:nowStamp()}:r);setAll(next);persist({id});};
   const addRec=rec=>{setAll([rec,...recsRef.current]);TB.save(rec).catch(e=>toast('⚠ 저장 실패 — '+e.message));};
   const remove=(id,rec)=>{setAll(recsRef.current.filter(r=>r.id!==id));setSel(null);TB.remove(id,rec).then(()=>toast('영구 삭제했습니다')).catch(e=>toast('⚠ '+e.message));};
+  /* 여러 개 삭제 — 실패하면 목록을 되돌린다 */
+  const removeMany=async ids=>{const set=new Set(ids);const gone=recsRef.current.filter(r=>set.has(r.id));if(!gone.length)return;
+    const keep=recsRef.current;setAll(keep.filter(r=>!set.has(r.id)));if(set.has(sel))setSel(null);
+    try{await TB.removeMany(gone);toast(gone.length+'개 기록을 영구 삭제했습니다');}
+    catch(e){setAll(keep);toast('⚠ 삭제 실패 — '+e.message);throw e;}};
   /* 통역 화면(LiveView)은 PMS 의 setDb('notes', fn) 모양으로 기록을 넘긴다 */
   const setDbShim=(kind,fn)=>{if(kind!=='notes')return;const before=new Set(recsRef.current.map(r=>r.id));
     const next=typeof fn==='function'?fn(recsRef.current):fn;
@@ -38965,7 +38999,7 @@ function TbShell({user,role,onLogout}){
           <ConvView setDb={setDbShim} toast={toast} onOpenNote={(id)=>{setSel(id);setTab('rec');}}/></div>
         {/* 녹취록도 숨겨 두기만 한다 — 전사·정리 중에 다른 탭을 봐도 작업 상태가 사라지지 않게 */}
         <div style={{display:tab==='rec'?'block':'none'}}>
-          <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/></div>
+          <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/></div>
         {tab==='me'&&role==='owner'&&<TbSettings toast={toast} role={role} cfg={cfg} setCfg={setCfg} newModels={newModels} setNewModels={setNewModels}/>}
       </>}
     </main>
