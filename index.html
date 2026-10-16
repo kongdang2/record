@@ -37045,56 +37045,57 @@ Object.assign(window,{modelName,LiveView,LiveSession,LiveConn,liveMerge,pcm16b64
 </script>
 <script type="text/babel">
 /* ── 대화 (양방향 통역) ───────────────────────────────────────
-   마주 앉은 대화나 스피커폰 통화를 양쪽으로 통역한다. 서버(Edge Function livetranslate)는 그대로 쓴다
-   · 🎯 정확하게: 받아쓰기 연결(mode=asr)에 from=ko,<상대 언어> 를 보내 서버가 두 언어를 힌트로 준다(v9.6, 서버 함수도
-     쉼표 목록을 받도록 고침). LiveTranslate(qwen3.8)의 받아쓰기는 언어를 못 정해 한국어 말을 일본어 글로 적곤 했다
-   · 받아쓴 글자로 누가 말했는지 가린다(한글이면 나, 아니면 상대) → Claude가 반대쪽 언어로 번역
-   · 내 말의 번역(상대 언어)은 기기 음성으로 읽어 준다. 읽는 동안은 마이크 대신 무음을 보낸다(자기 목소리 재번역 방지)
-   · 상대 말의 번역(한국어)은 기본은 자막만 — 스피커폰이면 소리가 상대에게도 들어가기 때문
-   · 누르는 동안만 듣기: 손을 떼면 무음을 보낸다(연결은 그대로 두어 다시 누르면 바로 듣는다)
-   · ⚡ 빠르게: Claude를 거치지 않고 LiveTranslate의 번역을 바로 쓴다(받아쓰기도 LiveTranslate — 언어 힌트는 못 준다). 한 연결은 한 방향만 번역하므로
-     같은 소리를 두 연결(→한국어, →상대 언어)에 보낸다(받아쓰기 요금 2배). 상대 말은 →한국어 연결의 번역,
-     내 말은 →상대 언어 연결(쌍둥이)의 번역을 시간이 가까운 문장끼리 짝지어 쓴다. 못 찾거나 서버가 번역 언어를
-     받지 않으면(번역에 한글이 섞여 오면) 그 문장만 Claude로 번역한다 */
+   v10 — 방향을 나눈다. 마이크 하나로 들어온 소리에서 "누가 말했나"를 글자로 맞히던 방식(v9)은 버렸다
+   · 받는 쪽(기본): 🗣 통역 탭과 같은 엔진(LiveSession·LiveConn). 상대 언어만 듣고 한국어 자막을 낸다.
+     정확도/속도·모델은 통역 탭 설정(설정 화면)을 그대로 따른다. 한국어 음성은 없다
+   · 주는 쪽: 🎙 단추를 누르는 동안만 소리를 "내 말" 연결(받아쓰기 asr, from=ko)로 보낸다. 단추를 떼면 session.finish 로
+     마지막 문장까지 받고 닫는다 → Claude가 상대 언어로 번역 → 기기 음성으로 읽어 준다(단추를 뗀 뒤에 읽는다)
+   · 누르는 동안과 읽어 주는 동안은 받는 쪽에 무음을 보낸다(내 말·내 음성이 상대 자막에 섞이지 않게)
+   · 내 말 연결은 누르는 동안만 열리므로 받아쓰기 요금은 통역 탭 + 내가 말한 시간만큼이다
+   · 받아쓰기가 문장을 중간에 끊어 조각으로 보내면 잠깐 기다려 이어 붙인 뒤 번역하고, 같은 글이 두 번 오면 한 번만 쓴다 */
 const CONV_THEIRS=[{id:'zh',label:'중국어',tts:'zh-CN'},{id:'en',label:'영어',tts:'en-US'},{id:'ja',label:'일본어',tts:'ja-JP'}];
 const CONV_TTS={ko:'ko-KR',zh:'zh-CN',en:'en-US',ja:'ja-JP'};
-const CONV_SPEEDS=[{id:'acc',label:'🎯 정확하게',desc:'받아쓰기에 한국어+상대 언어를 지정 · Claude 번역 · 앞 대화와 용어 힌트를 봄'},{id:'fast',label:'⚡ 빠르게',desc:'LiveTranslate 번역을 바로 · 1~2초 빠름 · 받아쓰기 요금 2배 · 말한 언어 구분이 덜 정확'}];
 const CONV_LAYOUTS=[{id:'call',label:'📞 한 화면',desc:'스피커폰 통화 · 혼자 보기'},{id:'face',label:'🤝 마주 보기',desc:'위쪽은 상대를 향해 뒤집혀 보입니다'}];
-/* 받아쓴 글의 글자로 언어 가리기 */
+const CONV_JOIN_MS=1500;const CONV_JOIN_AFTER_MS=600;const CONV_JOIN_MAX=4;const CONV_DUP_MS=6000;
+const convClosed=t=>/[。．.!?！？」』]\s*$/.test(String(t||'').trim());
+/* 받아쓴 글의 글자로 언어 가리기 (기록 표시용) */
 function convLang(t){t=String(t||'');const n=re=>(t.match(re)||[]).length;
   const ko=n(/[가-힣]/g),kana=n(/[぀-ヿ]/g),han=n(/[一-鿿]/g),lat=n(/[a-z]/gi);
   if(!ko&&!kana&&!han&&!lat)return '';
-  if(ko&&ko*3>=han+kana)return 'ko';   /* 한글이 1/4 이상이면 한국어(받아쓰기가 일부를 한자·가나로 적어도) */
+  if(ko&&ko*3>=han+kana)return 'ko';
   if(kana)return 'ja';
   if(han)return 'zh';
   return lat>ko*3?'en':'ko';}
-/* 누가 말했나 — 받아쓰기(LLM 기반)가 한국어를 다른 언어 글자(일본어·영어…)로 적어 버리는 때가 있다.
-   상대는 늘 상대 언어로 말하므로, 상대 언어 글자가 아니면 모두 '나'로 본다. 한글이 조금이라도 섞여 있어도 '나' */
-function convWho(t,theirs){const lang=convLang(t);if(!lang)return '';
-  if(lang==='ko'||/[가-힣]/.test(t))return 'me';
-  return lang===theirs?'them':'me';}
 let CONV_SILENT='';
 const convSilent=()=>CONV_SILENT||(CONV_SILENT=pcm16b64(new Float32Array(LIVE_CHUNK)));
 /* 기기 음성 고르기 — zh 는 zh-CN 을 먼저 */
 function convVoice(code){const ss=window.speechSynthesis;if(!ss)return null;
   const vs=ss.getVoices()||[];const norm=v=>String(v.lang||'').replace('_','-').toLowerCase();code=code.toLowerCase();
   return vs.find(v=>norm(v)===code&&v.localService)||vs.find(v=>norm(v)===code)||vs.find(v=>norm(v).slice(0,2)===code.slice(0,2))||null;}
+/* 글자 두 개씩 묶어 겹치는 비율 — 앱이 읽어 준 소리가 다시 들어온 것(메아리)인지 가린다 */
+function convSim(a,b){const g=t=>{t=convNorm(t);const o=new Set();for(let i=0;i<t.length-1;i++)o.add(t.slice(i,i+2));return o;};
+  const A=g(a),B=g(b);if(A.size<2||B.size<2)return 0;let n=0;A.forEach(x=>{if(B.has(x))n++;});return n/Math.min(A.size,B.size);}
+const convNorm=t=>String(t||'').replace(/[\s.,!?。，！？、…~·'"“”‘’「」]/g,'').toLowerCase();
 
-class ConvConn extends LiveConn{
-  constructor(sess,n,to){super(sess,n);this.to=to||'ko';}
-  /* LiveConn.open 과 같되 번역 언어(to)를 고를 수 있게 */
+/* 받는 쪽 연결 — 통역 탭의 LiveConn 그대로. 문장에 '상대' 표시를 달고, 앱이 읽어 준 소리가 되돌아온 것은 메아리로 표시한다 */
+class ConvInConn extends LiveConn{
+  seg(i){const g=super.seg(i);g.who='them';return g;}
+  handle(ev){const t=ev.type||'';
+    if(t==='conversation.item.input_audio_transcription.completed'){const i=this.si;super.handle(ev);const g=this.segs[i];
+      if(g&&this.sess.isEcho(g.zh)){g.echo=true;this.sess.log('메아리로 보고 버림: '+g.zh.slice(0,30));}return;}
+    super.handle(ev);}
+}
+/* 내 말 연결 — 받아쓰기(asr) 한국어만. 문장이 끝나면 ConvOut.turn 으로 */
+class ConvOutConn extends LiveConn{
+  seg(i){const g=super.seg(i);g.who='me';return g;}
   async open(){
     const s=this.sess,o=s.opt;
     const {data}=await Store.sb.auth.getSession();
     const jwt=data&&data.session&&data.session.access_token;
     if(!jwt)throw new Error('로그인 세션이 없습니다 — 다시 로그인하세요');
-    const asr=o.mode==='asr';
-    const q=new URLSearchParams({jwt,mode:asr?'asr':'live',model:asr?o.asrModel:o.model,from:o.from,to:this.to});
-    if(asr){const hot=String(Store.cfg.sttHint||'').trim();if(hot)q.set('hot',hot.slice(0,1200));}
-    else{const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);}
-    /* 문장을 끊는 침묵 길이 — 받아쓰기(asr)는 짧은 쉼에도 끊으므로 대화에서는 최소 CONV_SIL_MIN */
-    const sil=asr?Math.max(Number(Store.cfg.liveSil)||0,CONV_SIL_MIN):(Number(Store.cfg.liveSil)||0);
-    if(sil)q.set('sil',String(sil));
+    const q=new URLSearchParams({jwt,mode:'asr',model:o.asrModel,from:'ko',to:o.theirs});
+    const hot=String(Store.cfg.sttHint||'').trim();if(hot)q.set('hot',hot.slice(0,1200));
+    if(Store.cfg.liveSil)q.set('sil',String(Store.cfg.liveSil));
     if(Store.cfg.supabaseKey)q.set('apikey',Store.cfg.supabaseKey);
     const url=String(Store.cfg.supabaseUrl||'').replace(/\/+$/,'').replace(/^http/i,'ws')+'/functions/v1/livetranslate?'+q;
     const ws=new WebSocket(url);this.ws=ws;
@@ -37104,167 +37105,153 @@ class ConvConn extends LiveConn{
     ws.onerror=()=>{};
   }
   handle(ev){const t=ev.type||'';
-    /* 모델 번역은 seg.m 에 따로 둔다(빠르게 방식만 쓴다). 화면의 번역(seg.ko)은 turn()이 정한다 */
-    if(/^response\./.test(t)){
-      if(/^response\.text\./.test(t))this.textOut=true;
-      if(/^response\.audio_transcript\./.test(t)&&this.textOut)return;
-      const g=this.seg(this.ti);
-      if(/\.delta$/.test(t)&&/^response\.(text|audio_transcript)\./.test(t)){g.m=(g.m||'')+(ev.delta||'');return;}
-      if(t==='response.text.text'||t==='response.audio_transcript.text'){g.m=liveMerge(g.m||'',ev.text||ev.delta||'');return;}
-      if(t==='response.text.done'||t==='response.audio_transcript.done'){g.m=ev.text||ev.transcript||g.m||'';g.mDone=true;this.ti++;
-        this.sess.mdone&&this.sess.mdone(g);return;}
-      return;}
     if(t==='conversation.item.input_audio_transcription.completed'){const g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;this.si++;
-      if(this.sess.err&&this.ready)this.sess.err='';this.sess.bump();this.sess.turn(g);return;}
+      this.sess.turn(g);this.sess.bump();return;}
+    if(/^response\./.test(t))return;
     super.handle(ev);}
 }
-/* 글자 두 개씩 묶어 겹치는 비율 — 앱이 읽어 준 소리가 다시 들어온 것(메아리)인지 가린다 */
-function convSim(a,b){const g=t=>{t=convNorm(t);const o=new Set();for(let i=0;i<t.length-1;i++)o.add(t.slice(i,i+2));return o;};
-  const A=g(a),B=g(b);if(A.size<2||B.size<2)return 0;let n=0;A.forEach(x=>{if(B.has(x))n++;});return n/Math.min(A.size,B.size);}
-const convNorm=t=>String(t||'').replace(/[\s.,!?。，！？、…~·'"“”‘’「」]/g,'').toLowerCase();
-const convWait=(ok,ms)=>new Promise(r=>{const t0=Date.now();const f=()=>{const v=ok();if(v||Date.now()-t0>ms)return r(v);setTimeout(f,100);};f();});
-/* v9.8 — 받아쓰기가 문장을 중간에 끊어 조각으로 보낼 때가 있다(짧은 쉼에도 끊음). 조각을 그대로 번역하면 끝부분이 틀리므로
-   · 문장 끝 글자(。.?!)로 끝나지 않은 조각은 CONV_JOIN_MS 만큼 기다려 같은 사람의 다음 조각과 이어 붙인 뒤 번역한다
-   · 같은 글이 몇 초 안에 두 번 오면(서버가 완성문을 두 번 보냄) 한 번만 쓴다 */
-const CONV_JOIN_MS=2000;const CONV_JOIN_MAX=4;const CONV_DUP_MS=6000;const CONV_SIL_MIN=900;
-const convClosed=t=>/[。．.!?！？」』]\s*$/.test(String(t||'').trim());
-
-/* ⚡ 빠르게 — 내 말을 상대 언어로 옮기는 두 번째 연결. 마이크는 없고 본 세션이 소리를 나눠 준다 */
-class ConvTwin extends LiveSession{
-  constructor(main){super({...main.opt},null);this.main=main;this.got=[];}
-  begin(){this.running=true;this.t0=Date.now();this.connect();this.rot=setInterval(()=>this.rotate(),LIVE_ROTATE_MS);}
+/* 내 말 세션 — 마이크는 없고 본 세션(ConvSession)이 단추를 누르는 동안만 소리를 나눠 준다.
+   누를 때 연결을 열고(여는 동안의 소리는 queue 에 모였다가 열리면 보낸다) 떼면 session.finish 로 닫는다 */
+class ConvOut extends LiveSession{
+  constructor(main){super({...main.opt},null);this.main=main;this.t0=main.t0;this.running=true;this.fails=0;}
+  log(m){this.main.log('[내 말] '+m);}
+  bump(){this.main.bump();}
   async connect(){
-    const c=new ConvConn(this,++this.n,this.opt.theirs);this.conns.push(c);this.pendingConn=c;
-    try{await c.open();}catch(e){this.fail(e.message);}
-    return c;
-  }
-  log(m){this.main.log('[→'+this.opt.theirs+'] '+m);}
-  bump(){}
-  fail(msg){this.log('⚠ '+msg);this.dead=true;this.stop(true);}
-  stop(hard){this.running=false;clearInterval(this.rot);for(const c of this.conns)if(!c.gone){if(hard)c.close();else c.finish();}}
-  /* 문장 하나에 받아쓰기·번역이 둘 다 오면 기록해 둔다 */
-  turn(g){g.at=Date.now();this.keep(g);}
-  mdone(g){this.keep(g);}
-  keep(g){if(!g.zhDone||!g.mDone||g.kept)return;g.kept=true;
-    if((this.main.forcedWho()||convWho(g.zh,this.opt.theirs))!=='me')return;
-    this.got.push({at:g.at||Date.now(),src:convNorm(g.zh),tr:String(g.m||'').trim(),used:false});if(this.got.length>40)this.got.shift();}
-  /* 본 세션의 내 말 g 와 짝 찾기 — 글이 같으면 우선, 아니면 시간이 가장 가까운 것 */
-  match(g){const now=Date.now(),src=convNorm(g.zh);
-    const c=this.got.filter(x=>!x.used&&Math.abs(x.at-now)<5000);
-    const hit=c.find(x=>x.src===src)||c.sort((a,b)=>Math.abs(a.at-now)-Math.abs(b.at-now))[0];
-    if(hit)hit.used=true;return hit||null;}
-}
-
-class ConvSession extends LiveSession{
-  /* 정확하게: 받아쓰기 연결(asr) + 언어 힌트 ko,<상대>. 빠르게: LiveTranslate 연결(live, 받아쓰기는 상대 언어 기준) */
-  constructor(opt,onChange){super({...opt,mode:opt.fast?'live':'asr',from:opt.fast?opt.theirs:'ko,'+opt.theirs},onChange);this.speaking=false;this.held=false;this.spkAt=0;}
-  async start(){
-    if(claudeMode()==='none')throw new Error('대화 통역은 Claude 번역을 씁니다 — Claude 연결을 먼저 확인하세요');
-    await super.start();
-    if(this.opt.fast){this.twin=new ConvTwin(this);this.twin.begin();}
-    this.spkW=setInterval(()=>{const ss=window.speechSynthesis;
-      if(this.speaking&&ss&&!ss.speaking&&!ss.pending&&Date.now()-this.spkAt>1500){this.speaking=false;this.bump();}},400);
-  }
-  async connect(){
-    const c=new ConvConn(this,++this.n,'ko');this.conns.push(c);this.pendingConn=c;
+    const c=new ConvOutConn(this,++this.n);this.conns.push(c);this.pendingConn=c;
     this.log('연결 '+c.n+' 여는 중');
     try{await c.open();}catch(e){this.fail(e.message);}
     return c;
   }
-  get muted(){return this.speaking||(!!this.opt.ptt&&!this.held);}
-  forcedWho(){const w=this.opt.who;return w==='me'||w==='them'?w:'';}
-  push(m){const x=this.muted?convSilent():m;super.push(x);
-    if(this.twin&&this.twin.running)this.twin.push(x);}
-  /* 한 문장이 끝남 → 누가 말했는지 가리고 반대쪽 언어로 */
-  async turn(g){
-    /* 메아리: 최근 20초 안에 앱이 읽어 준 문장과 많이 겹치면 버린다 */
-    const said=(this.said||[]).filter(x=>Date.now()-x.at<20000);
-    if(g.zh.trim()&&said.some(x=>convSim(g.zh,x.text)>=0.45)){g.echo=true;g.koDone=true;this.log('메아리로 보고 버림: '+g.zh.slice(0,30));this.bump();return;}
-    const lang=convLang(g.zh);g.lang=lang||this.opt.theirs;
-    /* 말하는 사람: 화면에서 '나'/'상대'를 골라 두었으면 그대로, 아니면 글자로 판단 */
-    g.who=this.forcedWho()||convWho(g.zh,this.opt.theirs)||'them';g.to=g.who==='me'?this.opt.theirs:'ko';
-    g.wrongScript=g.who==='me'?lang!=='ko':lang!==this.opt.theirs;   /* 받아쓰기가 말한 언어와 다른 글자로 적음 */
-    if(!g.zh.trim()){g.koDone=true;this.bump();return;}
+  onConnOpen(c){
+    if(this.pendingConn!==c){if(!c.gone)c.finish();return;}
+    this.pendingConn=null;this.active=c;
+    for(const m of this.queue.splice(0))c.send(m);
+    if(c.closeWhenOpen){this.active=null;c.finish();}   /* 열리기 전에 손을 뗐다 → 모아 둔 소리를 보내고 바로 마감 */
+    this.bump();
+  }
+  onConnClose(c,e){
+    this.log('연결 '+c.n+' 닫힘'+(e&&e.code?' ('+e.code+(e.reason?' '+e.reason:'')+')':''));
+    if(c===this.active)this.active=null;
+    if(c===this.pendingConn)this.pendingConn=null;
+    if(!c.ready&&!c.finishing&&!c.closeWhenOpen&&this.main.held){   /* 열리기도 전에 끊김 → 누르고 있는 동안 한 번 더 */
+      this.fails++;
+      if(this.fails<3)setTimeout(()=>this.main.held&&!this.active&&!this.pendingConn&&this.connect(),800);
+      else this.fail(this.err||'내 말 연결에 실패했습니다 — 통역 서버(livetranslate)를 확인하세요');}
+    this.bump();
+  }
+  press(){if(this.active||this.pendingConn)return;this.queue.length=0;this.fails=0;this.connect();}
+  release(){
+    const c=this.active||this.pendingConn;this.active=null;this.pendingConn=null;
+    if(c&&!c.gone){if(c.ready)c.finish();else c.closeWhenOpen=true;}
+    if(this.joining){clearTimeout(this.joinT);this.wait(this.joining);}   /* 손을 뗐으니 조각은 조금만 더 기다린다 */
+  }
+  fail(msg){this.err=msg;this.log('⚠ '+msg);this.main.err=msg;this.bump();}
+  stop(hard){this.running=false;clearTimeout(this.joinT);
+    if(this.joining){const j=this.joining;this.joining=null;this.xlate(j);}
+    for(const c of this.conns)if(!c.gone){if(hard)c.close();else c.finish();}}
+  /* 한 문장이 끝남 */
+  turn(g){
     g.doneAt=Date.now();
-    /* 같은 글이 방금 또 왔으면 버린다 */
-    const last=this.segs.filter(x=>x!==g&&x.who&&!x.merged&&!x.dup&&!x.echo&&x.zh.trim()).slice(-2);
-    const gn=convNorm(g.zh);   /* 같은 글, 또는 방금 문장의 끝부분과 같은 글(마지막 조각을 다시 보냄) */
-    if(last.some(x=>x.who===g.who&&Date.now()-(x.doneAt||0)<CONV_DUP_MS&&(convNorm(x.zh)===gn||(gn.length>=4&&convNorm(x.zh).endsWith(gn))))){
-      g.dup=true;g.koDone=true;this.log('같은 문장 두 번 → 버림: '+g.zh.slice(0,30));this.bump();return;}
+    if(!g.zh.trim()){g.koDone=true;return;}
+    /* 같은 글(또는 방금 문장의 끝부분)이 또 왔으면 버린다 */
+    const last=this.segs.filter(x=>x!==g&&!x.merged&&!x.dup&&x.zh.trim()).slice(-2);const gn=convNorm(g.zh);
+    if(last.some(x=>Date.now()-(x.doneAt||0)<CONV_DUP_MS&&(convNorm(x.zh)===gn||(gn.length>=4&&convNorm(x.zh).endsWith(gn))))){
+      g.dup=true;g.koDone=true;this.log('같은 문장 두 번 → 버림: '+g.zh.slice(0,30));return;}
     /* 끊긴 조각 이어 붙이기 */
     const j=this.joining;
-    if(j&&j.who===g.who&&!j.koDone){
+    if(j&&!j.koDone){
       clearTimeout(this.joinT);j.zh=j.zh.trim()+' '+g.zh.trim();j.joins=(j.joins||0)+1;j.doneAt=Date.now();
       g.merged=true;g.koDone=true;this.log('조각 이어 붙임('+j.joins+'): '+g.zh.slice(0,20));
-      if(convClosed(j.zh)||j.joins>=CONV_JOIN_MAX){this.joining=null;this.translateTurn(j);}
-      else this.joinT=setTimeout(()=>{if(this.joining===j){this.joining=null;this.translateTurn(j);}},CONV_JOIN_MS);
-      this.bump();return;}
-    if(j&&!j.koDone){clearTimeout(this.joinT);this.joining=null;this.translateTurn(j);}   /* 다른 사람이 말함 → 기다리던 조각은 그대로 번역 */
-    if(!convClosed(g.zh)){
-      this.joining=g;g.koS='…';this.joinT=setTimeout(()=>{if(this.joining===g){this.joining=null;this.translateTurn(g);}},CONV_JOIN_MS);
-      this.bump();return;}
-    this.translateTurn(g);
+      if((convClosed(j.zh)&&!this.main.held)||j.joins>=CONV_JOIN_MAX){this.joining=null;this.xlate(j);}
+      else this.wait(j);
+      return;}
+    if(convClosed(g.zh)&&!this.main.held){this.xlate(g);return;}   /* 완성된 문장이고 손을 뗐다 → 바로 */
+    this.wait(g);
   }
-  async translateTurn(g){
-    if(this.opt.fast&&await this.fastTurn(g))return;
-    const done=this.segs.filter(x=>x.koDone&&x.who&&x!==g&&!x.merged&&!x.dup&&!x.echo&&x.zh.trim()).slice(-6);
+  wait(g){this.joining=g;g.koS='…';
+    this.joinT=setTimeout(()=>{if(this.joining===g){this.joining=null;this.xlate(g);}},this.main.held?CONV_JOIN_MS:CONV_JOIN_AFTER_MS);}
+  /* 내 한국어 → 상대 언어 (Claude). 앞선 대화(상대 말 포함)를 문맥으로 */
+  async xlate(g){
+    const theirs=langLabel(this.opt.theirs);
+    const done=this.main.allSegs.filter(x=>x!==g&&x.koDone&&(x.zh||'').trim()).slice(-6);
     const prev=done.map(x=>'- '+(x.who==='me'?'나':'상대')+': '+x.zh+(x.ko?' → '+x.ko:'')).join('\n');
     const hint=String(Store.cfg.sttHint||'').trim();
-    const theirs=langLabel(this.opt.theirs);
     g.koS='번역 중…';this.bump();
     const system='너는 한국어 화자(나)와 '+theirs+' 화자(상대)가 나누는 대화(마주 앉은 대화 또는 스피커폰 통화)의 통역사다.\n'
-      +'- 이번 발화를 '+langLabel(g.to)+'로 옮긴다. 번역문만 출력한다(설명·따옴표·원문 반복·화자 표시 금지)\n'
+      +'- 이번 발화(나, 한국어)를 '+theirs+'로 옮긴다. 번역문만 출력한다(설명·따옴표·원문 반복·화자 표시 금지)\n'
       +'- 받아쓰기가 잘못 들은 낱말은 앞뒤 대화와 용어 목록을 보고 바로잡아 번역한다\n'
       +'- 말하듯 자연스럽고 짧게. 소리로 읽어 줄 문장이므로 괄호·기호를 쓰지 않는다\n'
       +'- 숫자·날짜·가격·수량은 정확히\n'
       +'- 알아들을 내용이 없으면(잡음·추임새뿐이면) 아무것도 출력하지 않는다'
-      +'\n- 받아쓰기는 말을 다른 언어 글자로 적어 버릴 때가 있다(한국어 말이 일본어 글로 오는 등). 화자 표시를 믿고, 글자가 어떤 언어든 그 뜻을 '+langLabel(g.to)+'로 옮긴다'
-      +(g.to==='ko'?'\n- 한국어는 존댓말':'')
       +(hint?'\n\n자주 나오는 용어: '+hint:'');
-    const prompt=(prev?'앞선 대화(참고용):\n'+prev+'\n\n':'')+'이번 발화('+(g.who==='me'?'나':'상대')+(g.wrongScript?', '+(g.who==='me'?'한국어':theirs)+' 말인데 받아쓰기가 다른 언어 글자로 적음':'')+'):\n'+g.zh;
+    const prompt=(prev?'앞선 대화(참고용):\n'+prev+'\n\n':'')+'이번 발화(나):\n'+g.zh;
     try{
       const out=await askClaude(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:500,usageTag:'통역 번역'});
       g.ko=String(out||'').trim().replace(/^["“「]|["”」]$/g,'');g.koS='';
     }catch(e){g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패: '+(e.message||e));}
-    g.koDone=true;g.via='claude';this.bump();
-    this.say(g);
+    g.koDone=true;g.to=this.opt.theirs;this.bump();
+    this.main.say(g);
   }
-  say(g){if(g.ko&&this.running&&(g.who==='me'?this.opt.speakThem!==false:!!this.opt.speakMe))this.speak(g.ko,g.to);}
-  /* ⚡ 빠르게: 모델 번역을 바로 쓴다. 쓸 만한 번역이 없으면 false → Claude 로 */
-  async fastTurn(g){
-    g.koS='…';this.bump();
-    let tr='';
-    if(g.who==='them'){await convWait(()=>g.mDone,3000);tr=String(g.m||'').trim();
-      if(tr&&!/[가-힣]/.test(tr))tr='';}            /* →한국어 연결인데 한글이 없으면 못 믿는다 */
-    else if(this.twin&&!this.twin.dead&&!this.twinBad){
-      const hit=await convWait(()=>this.twin.match(g),2500);
-      if(hit){tr=hit.tr;
-        if(/[가-힣]/.test(tr)){this.twinBad=true;tr='';
-          this.log('⚠ 서버가 번역 언어(to)를 받지 않습니다 — 내 말은 Claude로 번역합니다');
-          this.note='⚡ 서버 함수가 번역 언어 지정을 받지 않아, 내 말은 Claude로 번역합니다(조금 느림). 상대 말은 빠르게 그대로입니다';}}}
-    if(!tr){g.koS='';return false;}
-    g.ko=tr.replace(/^["“「]|["”」]$/g,'');g.koS='';g.koDone=true;g.via='model';this.bump();
-    this.say(g);return true;
+}
+/* 본 세션 = 받는 쪽(통역 탭 엔진) + 마이크. 단추를 누르는 동안 소리를 내 말 세션으로 돌린다 */
+class ConvSession extends LiveSession{
+  constructor(opt,onChange){
+    const live={mode:Store.cfg.liveMode||'asr',model:Store.cfg.liveModel||LIVE_MODELS[0].id,
+      asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id};
+    super({...live,...opt,from:opt.theirs,host:'',clean:false,record:!!opt.record},onChange);
+    this.speaking=false;this.held=false;this.spkAt=0;this.sayQ=[];this.said=[];
   }
+  async start(){
+    if(claudeMode()==='none')throw new Error('대화 통역은 내 말 번역에 Claude를 씁니다 — 설정 › Claude 연결을 먼저 확인하세요');
+    await super.start();
+    this.out=new ConvOut(this);
+    this.spkW=setInterval(()=>{const ss=window.speechSynthesis;
+      if(this.speaking&&ss&&!ss.speaking&&!ss.pending&&Date.now()-this.spkAt>1500){this.speaking=false;this.bump();}},400);
+  }
+  async connect(){
+    const c=new ConvInConn(this,++this.n);this.conns.push(c);this.pendingConn=c;
+    this.log('연결 '+c.n+' 여는 중');
+    try{await c.open();}catch(e){this.fail(e.message);}
+    return c;
+  }
+  get muted(){return this.held||this.speaking;}
+  push(m){
+    if(this.held&&this.out)this.out.push(m);
+    super.push(this.muted?convSilent():m);
+  }
+  press(){if(!this.running||this.held)return;this.held=true;if(this.out)this.out.press();this.bump();}
+  release(){if(!this.held)return;this.held=false;if(this.out)this.out.release();this.flushSay();this.bump();}
+  /* 받는 쪽·주는 쪽 문장을 시간순으로 */
+  get allSegs(){
+    return [...this.segs,...(this.out?this.out.segs:[])]
+      .filter(g=>!g.echo&&!g.merged&&!g.dup&&(g.zh||g.zhS||g.ko||g.koS))
+      .sort((a,b)=>(a.t==null?1e9:a.t)-(b.t==null?1e9:b.t));
+  }
+  isEcho(text){const said=this.said.filter(x=>Date.now()-x.at<20000);return !!String(text||'').trim()&&said.some(x=>convSim(text,x.text)>=0.45);}
+  /* 내 말의 번역을 읽어 준다 — 단추를 누르고 있는 동안은 모아 두었다가 떼면 읽는다 */
+  say(g){if(!g.ko||!this.running||this.opt.speakThem===false)return;
+    if(this.held){this.sayQ.push(g);return;}
+    this.speak(g.ko,g.to);}
+  flushSay(){for(const g of this.sayQ.splice(0))this.speak(g.ko,g.to);}
   speak(text,lang){
     const ss=window.speechSynthesis;if(!ss||!window.SpeechSynthesisUtterance)return;
     const u=new SpeechSynthesisUtterance(text);const code=CONV_TTS[lang]||lang;u.lang=code;
     const v=convVoice(code);if(v)u.voice=v;u.rate=Number(this.opt.rate)||1;
     this.speaking=true;this.spkAt=Date.now();
-    (this.said=this.said||[]).push({text,at:Date.now()});if(this.said.length>12)this.said.shift();
+    this.said.push({text,at:Date.now()});if(this.said.length>12)this.said.shift();
     u.onstart=()=>{this.speaking=true;this.spkAt=Date.now();this.bump();};
     u.onend=u.onerror=()=>{this.spkAt=Date.now()-500;};   /* 끝난 뒤 1초 더 무음(스피커 지연·울림 꼬리) */
     ss.speak(u);this.bump();
   }
-  stop(hard){clearInterval(this.spkW);if(this.twin)this.twin.stop(hard);try{window.speechSynthesis&&window.speechSynthesis.cancel();}catch(_){}
-    if(this.joining){const j=this.joining;this.joining=null;clearTimeout(this.joinT);this.translateTurn(j);}
+  stop(hard){clearInterval(this.spkW);this.held=false;if(this.out)this.out.stop(hard);
+    try{window.speechSynthesis&&window.speechSynthesis.cancel();}catch(_){}
     this.speaking=false;super.stop(hard);}
+  get howIn(){return this.opt.mode==='asr'?'정확도 우선 ('+modelName(this.opt.asrModel)+' 받아쓰기 + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 번역)':'속도 우선 ('+modelName(this.opt.model)+')';}
+  get howOut(){return modelName(this.opt.asrModel)+' 받아쓰기 + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 번역 · 기기 음성';}
   toMarkdown(title,audioLinks){
-    const segs=this.segs.filter(g=>g.who&&!g.merged&&!g.dup&&!g.echo&&(g.zh||'').trim());
+    const segs=this.allSegs.filter(g=>(g.zh||'').trim());
     const lines=segs.map(g=>'**'+(g.who==='me'?'나':'상대')+'** '+g.zh.trim()+'\n→ '+((g.ko||'').trim()||'(번역 없음)')).join('\n\n');
-    return '# '+title+'\n\n> 💬 양방향 대화 · 한국어 ↔ '+langLabel(this.opt.theirs)+' · 약 '+this.minutes+'분 · '
-      +(this.opt.fast?'⚡ 빠르게 ('+modelName(this.opt.model)+' 번역, 일부 '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+')'
-        :modelName(this.opt.asrModel)+' 받아쓰기(한국어·'+langLabel(this.opt.theirs)+') + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 번역')+'\n\n'
+    return '# '+title+'\n\n> 💬 양방향 대화 · 한국어 ↔ '+langLabel(this.opt.theirs)+' · 약 '+this.minutes+'분 · 받기: '+this.howIn+' · 주기: '+this.howOut+'\n\n'
       +(audioLinks&&audioLinks.length?audioLinks.join('\n')+'\n\n':'')
       +'## 대화\n'+(lines||'(대화 없음)')+'\n';
   }
@@ -37273,29 +37260,30 @@ class ConvSession extends LiveSession{
 const CONV={sess:null,saved:null};
 
 /* 말풍선 하나 — side: 오른쪽(이 화면을 보는 사람이 한 말) / 왼쪽 */
-function ConvBubble({right,main,sub,subS,big,label}){
+function ConvBubble({right,main,sub,big,label}){
   return <div style={{display:'flex',justifyContent:right?'flex-end':'flex-start',margin:'6px 0'}}>
     <div style={{maxWidth:'86%',padding:'7px 11px',borderRadius:12,borderTopRightRadius:right?3:12,borderTopLeftRadius:right?12:3,
       background:right?'#E5EFEA':'#F3F4F6',border:'1px solid '+(right?'#C4D5CE':'#E5E7EB')}}>
-      {label&&<div style={{fontSize:11,color:'var(--text-label)',marginBottom:1}}>{label}</div>}
-      <div style={{fontSize:big,lineHeight:1.45,color:'var(--text-body)'}}>{main}</div>
-      {(sub||subS)&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:2}}>{sub}<span style={{opacity:.6}}>{subS}</span></div>}
-    </div></div>;
+      {label&&<div style={{fontSize:10,color:'var(--text-label)',marginBottom:2}}>{label}</div>}
+      <div style={{fontSize:big?22:17,lineHeight:1.35,color:'var(--text-body)',wordBreak:'break-word'}}>{main}</div>
+      {sub?<div style={{fontSize:big?14:12,color:'var(--text-muted)',marginTop:3,wordBreak:'break-word'}}>{sub}</div>:null}
+    </div>
+  </div>;
 }
-/* 한 사람 쪽에서 본 대화 — view: 'ko'(나) 또는 'them'(상대) */
+/* 말풍선 목록 — view 'ko': 한국어 읽는 사람(나) 쪽 화면, 'them': 상대 쪽 화면(뒤집어 보임) */
 function ConvPane({segs,view,big,flip,boxRef,onScroll,height,empty}){
   return <div ref={boxRef} onScroll={onScroll} style={{height,minHeight:flip?140:220,overflowY:'auto',border:'1px solid var(--border-default)',borderRadius:6,
       padding:'4px 10px',background:'#fff',transform:flip?'rotate(180deg)':'none'}}>
     {!segs.length&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:flip?30:50,lineHeight:1.8,fontSize:'var(--fs-sm2)'}}>{empty}</div>}
     {segs.map((g,i)=>{
-      const pending=!g.who;   /* 아직 말하는 중 */
       const mine=view==='ko'?g.who==='me':g.who==='them';
+      const src=<span>{g.zh}{g.zhS?<span style={{opacity:.55}}>{g.zhS}</span>:null}</span>;
       const tr=g.ko||g.koS||(g.koDone?'':'…');
-      if(pending)return <ConvBubble key={i} right={false} big={big} label="듣는 중" main={<span style={{color:'var(--text-muted)'}}>{g.zh}<span style={{opacity:.6}}>{g.zhS}</span></span>}/>;
+      const listening=g.who==='me'&&!g.zhDone;
       /* 그 사람이 읽을 언어를 크게: 자기 말이면 원문, 상대 말이면 번역 */
       return <ConvBubble key={i} right={mine} big={big}
-        label={view==='ko'?(g.who==='me'?'나':'상대'):''}
-        main={mine?g.zh:tr} sub={view==='ko'?(mine?tr:g.zh):''}/>;
+        label={view==='ko'?(g.who==='me'?(listening?'나 · 말하는 중':'나'):'상대'):''}
+        main={mine?src:tr} sub={view==='ko'?(mine?tr:src):''}/>;
     })}
   </div>;
 }
@@ -37305,10 +37293,8 @@ function ConvView({setDb,toast,onOpenNote}){
   const mobile=useMobile();
   const [,force]=React.useReducer(x=>x+1,0);
   const [opt,setOpt]=React.useState(()=>({theirs:Store.cfg.convTheirs||'zh',layout:Store.cfg.convLayout||'call',
-    fast:false,/* v9.7: 대화는 🎯 정확하게만(받아쓰기 asr + 언어 힌트). ⚡ 빠르게 코드는 남겨 두되 화면에서 뺐다 */speakThem:Store.cfg.convSpeakThem!==false,speakMe:!!Store.cfg.convSpeakMe,ptt:!!Store.cfg.convPtt,record:!!Store.cfg.convRecord,rate:Store.cfg.convRate||'1'}));
+    speakThem:Store.cfg.convSpeakThem!==false,record:!!Store.cfg.convRecord,rate:Store.cfg.convRate||'1'}));
   const [saving,setSaving]=React.useState('');const [voices,setVoices]=React.useState(0);
-  const [who,setWho]=React.useState('auto');   /* 말하는 사람: auto | me | them (대화마다 자동으로 시작) */
-  const pickWho=w=>{setWho(w);if(CONV.sess)CONV.sess.opt.who=w;};
   const boxA=React.useRef(null),boxB=React.useRef(null);const stick=React.useRef({a:true,b:true});
   const sess=CONV.sess;const running=!!(sess&&sess.running);
   React.useEffect(()=>{if(CONV.sess)CONV.sess.onChange=force;return()=>{if(CONV.sess)CONV.sess.onChange=null;};},[sess]);
@@ -37318,8 +37304,14 @@ function ConvView({setDb,toast,onOpenNote}){
     ss.addEventListener&&ss.addEventListener('voiceschanged',f);return()=>ss.removeEventListener&&ss.removeEventListener('voiceschanged',f);},[]);
   React.useEffect(()=>{[['a',boxA],['b',boxB]].forEach(([k,r])=>{const el=r.current;if(!el||!stick.current[k])return;
     el.scrollTop=el.scrollHeight;});});
+  /* 데스크톱: 스페이스를 누르는 동안 말하기 */
+  React.useEffect(()=>{if(!running)return;
+    const dn=e=>{if(e.code!=='Space'||e.repeat||/INPUT|TEXTAREA|SELECT/.test(e.target&&e.target.tagName))return;e.preventDefault();CONV.sess&&CONV.sess.press();force();};
+    const up=e=>{if(e.code!=='Space')return;CONV.sess&&CONV.sess.release();force();};
+    window.addEventListener('keydown',dn);window.addEventListener('keyup',up);
+    return()=>{window.removeEventListener('keydown',dn);window.removeEventListener('keyup',up);};},[running]);
   const set=p=>{setOpt(o=>({...o,...p}));if(CONV.sess)Object.assign(CONV.sess.opt,p);
-    const map={fast:'convFast',theirs:'convTheirs',layout:'convLayout',speakThem:'convSpeakThem',speakMe:'convSpeakMe',ptt:'convPtt',record:'convRecord',rate:'convRate'};
+    const map={theirs:'convTheirs',layout:'convLayout',speakThem:'convSpeakThem',record:'convRecord',rate:'convRate'};
     const save={};Object.keys(p).forEach(k=>{if(map[k])save[map[k]]=p[k];});Store.saveCfg(save);};
   const theirs=CONV_THEIRS.find(l=>l.id===opt.theirs)||CONV_THEIRS[0];
   const hasTts=!!window.speechSynthesis;
@@ -37328,8 +37320,7 @@ function ConvView({setDb,toast,onOpenNote}){
     if(window.LIVE&&LIVE.sess&&LIVE.sess.running){toast('🗣 통역 탭이 켜져 있습니다 — 먼저 정지하세요');return;}
     /* 휴대폰 브라우저는 단추를 누른 순간에만 소리를 허락한다 — 빈 소리로 미리 풀어 둔다 */
     try{const ss=window.speechSynthesis;if(ss){ss.cancel();const u=new SpeechSynthesisUtterance(' ');u.volume=0;ss.speak(u);}}catch(_){}
-    setWho('auto');
-    const s=new ConvSession({...opt,who:'auto',model:Store.cfg.liveModel||LIVE_MODELS[0].id,asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id},force);
+    const s=new ConvSession({...opt},force);
     CONV.sess=s;CONV.saved=null;force();
     try{await s.start();}
     catch(e){s.stop(true);s.err=/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message;force();}
@@ -37337,8 +37328,9 @@ function ConvView({setDb,toast,onOpenNote}){
   const stop=async()=>{
     const s=CONV.sess;if(!s)return;s.stop(false);force();
     setSaving('정리 중…');await s.recFinished();
-    for(let i=0;i<16&&(s.segs.some(g=>g.zhDone&&!g.koDone)||s.conns.some(c=>!c.gone));i++)await new Promise(r=>setTimeout(r,500));
-    const segs=s.segs.filter(g=>g.who&&!g.merged&&!g.dup&&!g.echo&&(g.zh||'').trim());
+    const busy=()=>s.allSegs.some(g=>g.zhDone&&!g.koDone)||s.conns.some(c=>!c.gone)||(s.out&&s.out.conns.some(c=>!c.gone));
+    for(let i=0;i<16&&busy();i++)await new Promise(r=>setTimeout(r,500));
+    const segs=s.allSegs.filter(g=>(g.zh||'').trim());
     if(!segs.length&&!s.recParts.length){setSaving('');return;}
     const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
     const title='대화 '+stamp;const links=[];
@@ -37357,37 +37349,30 @@ function ConvView({setDb,toast,onOpenNote}){
     toast('대화 기록을 저장했습니다');
   };
   const reset=()=>{CONV.sess=null;CONV.saved=null;force();};
-  /* 누르는 동안 듣기 */
-  const hold=v=>e=>{if(e&&e.preventDefault)e.preventDefault();if(CONV.sess){CONV.sess.held=v;force();}};
-  const segs=sess?sess.segs.filter(g=>!g.echo&&!g.merged&&!g.dup&&(g.zh||g.zhS||g.ko||g.koS)):[];
+  /* 누르는 동안 말하기 */
+  const hold=v=>e=>{if(e&&e.preventDefault)e.preventDefault();if(CONV.sess){v?CONV.sess.press():CONV.sess.release();force();}};
+  const segs=sess?sess.allSegs:[];
   const secs=sess&&sess.t0?Math.floor(((sess.running?Date.now():(sess.tEnd||Date.now()))-sess.t0)/1000):0;
   const lvl=Math.min(1,(sess&&sess.level||0)*3);
-  const status=!sess?'대기':sess.running?(!(sess.active&&sess.active.ready)?'연결 중…':sess.speaking?'🔊 읽는 중':sess.muted?'손 떼면 쉼':'듣는 중'):'멈춤';
+  const status=!sess?'대기':sess.running?(!(sess.active&&sess.active.ready)?'연결 중…':sess.held?'🎙 내 말 듣는 중':sess.speaking?'🔊 읽는 중':'상대 말 듣는 중'):'멈춤';
   const sel={...inputStyle,width:'auto',padding:'4px 6px',fontSize:'var(--fs-sm2)'};
-  const face=opt.layout==='face';
-  const big=mobile?17:19;
-  const runBtn=running?<Button variant="danger" onClick={stop}>■ 정지</Button>:<Button onClick={start} disabled={!!saving}>● {sess?'새로 시작':'시작'}</Button>;
-  const scroll=k=>e=>{const el=e.currentTarget;const d=el.scrollHeight-el.scrollTop-el.clientHeight;stick.current[k]=Math.abs(d)<40;};
-  /* 말하는 사람 고르기 — 받아쓰기가 한국어를 일본어 글로 적는 일이 있어, 특히 일본어 상대일 때는 직접 고르는 게 정확하다 */
-  const whoBtn=(id,label,on)=><button key={id} type="button" onClick={()=>pickWho(id)} aria-pressed={on}
-    style={{flex:1,padding:mobile?'10px 4px':'8px 10px',borderRadius:8,border:'1px solid '+(on?'#15352F':'var(--border-strong)'),background:on?'#15352F':'#fff',color:on?'#fff':'var(--text-body)',
-      fontWeight:on?700:500,fontSize:mobile?14:'var(--fs-sm2)',cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{label}</button>;
-  /* 말하는 사람 고르기는 ⚡ 빠르게에서만 — 🎯 정확하게는 받아쓰기에 두 언어를 알려 주므로 글자로 가려도 맞는다 */
-  /* 말하는 사람 단추는 v9.7에서 뺐다(받아쓰기에 두 언어를 알려 주므로 글자로 가린다). 코드는 둔다 */
-  const whoRow=false&&running&&opt.fast&&<div style={{display:'flex',gap:6,margin:'6px 0',alignItems:'center'}}>
-    <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',whiteSpace:'nowrap'}}>말하는 사람</span>
-    {whoBtn('auto','자동',who==='auto')}{whoBtn('me','🇰🇷 나',who==='me')}{whoBtn('them',theirs.label+' 상대',who==='them')}</div>;
-  const pttBtn=opt.ptt&&running&&<button type="button" onPointerDown={hold(true)} onPointerUp={hold(false)} onPointerLeave={hold(false)} onPointerCancel={hold(false)}
+  const runBtn=running?<Button variant="danger" size="sm" onClick={stop}>■ 정지</Button>
+    :<Button variant="primary" size="sm" onClick={start} disabled={!!saving}>▶ 시작</Button>;
+  const face=opt.layout==='face';const big=face||mobile;
+  const scroll=k=>e=>{const el=e.target;stick.current[k]=el.scrollHeight-el.scrollTop-el.clientHeight<40;};
+  const pttBtn=running&&<button id="conv-ptt" type="button" onPointerDown={hold(true)} onPointerUp={hold(false)} onPointerLeave={hold(false)} onPointerCancel={hold(false)}
     onContextMenu={e=>e.preventDefault()}
     style={{width:'100%',margin:'6px 0',padding:'14px 0',borderRadius:10,border:'none',fontSize:16,fontWeight:700,fontFamily:'inherit',userSelect:'none',WebkitUserSelect:'none',touchAction:'none',
-      background:sess&&sess.held?'#DC2626':'#15352F',color:'#fff',cursor:'pointer'}}>{sess&&sess.held?'● 듣는 중 — 다 말하면 손을 떼세요':'🎙 누르고 말하기 (按住说话)'}</button>;
+      background:sess&&sess.held?'#DC2626':'#15352F',color:'#fff',cursor:'pointer'}}>{sess&&sess.held?'● 듣는 중 — 다 말하면 손을 떼세요':'🎙 누르고 말하기 → '+theirs.label+' 음성'}</button>;
   const tog=(k,label,title)=><label title={title} style={{cursor:'pointer',whiteSpace:'nowrap'}}><input type="checkbox" checked={!!opt[k]} onChange={e=>set({[k]:e.target.checked})}/> {label}</label>;
-  const H=mobile?'calc(100vh - 330px)':'calc(100vh - 360px)';
+  const liveMode=(LIVE_MODES.find(m=>m.id===(Store.cfg.liveMode||'asr'))||LIVE_MODES[0]).label;
+  /* 🎙 단추가 화면 안에 보이도록 말풍선 영역을 그만큼 낮춘다 */
+  const H=mobile?'calc(100vh - 400px)':'calc(100vh - 420px)';
   return <Card title="💬 대화" badge={<Badge tone="muted">{status}</Badge>}
     toolbar={mobile?null:runBtn}
     toolbarRight={<span style={{display:'inline-flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)'}}>
       <span title="입력 소리 크기" style={{width:60,height:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-default)',borderRadius:4,overflow:'hidden'}}>
-        <span style={{display:'block',height:'100%',width:(sess&&sess.muted?0:lvl*100)+'%',background:lvl>0.9?'var(--color-danger)':'#16a34a',transition:'width .1s'}}/></span>
+        <span style={{display:'block',height:'100%',width:(lvl*100)+'%',background:sess&&sess.held?'#DC2626':lvl>0.9?'var(--color-danger)':'#16a34a',transition:'width .1s'}}/></span>
       <span style={{fontFamily:'var(--font-num)'}}>{mmss(secs)}</span>
       {mobile&&runBtn}</span>}>
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6,fontSize:'var(--fs-sm2)'}}>
@@ -37397,21 +37382,18 @@ function ConvView({setDb,toast,onOpenNote}){
         {CONV_LAYOUTS.map(m=><button key={m.id} type="button" onClick={()=>set({layout:m.id})} title={m.desc}
           style={{border:'none',borderRadius:4,padding:'4px 10px',fontSize:'var(--fs-sm2)',fontWeight:opt.layout===m.id?600:500,background:opt.layout===m.id?'var(--surface-active)':'transparent',
             color:opt.layout===m.id?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{m.label}</button>)}</span>
+      <span style={{color:'var(--text-label)'}} title="통역 탭·설정 화면의 통역 방식과 모델을 그대로 씁니다">· 받기: {liveMode} (통역 탭 설정)</span>
     </div>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6,display:'flex',flexWrap:'wrap',gap:'4px 12px',alignItems:'center'}}>
-      {tog('speakThem','내 말 → '+theirs.label+' 음성','내 말을 번역해 상대 언어로 읽어 줍니다')}
-      {tog('speakMe','상대 말 → 한국어 음성','스피커폰 통화에서는 끄세요 — 한국어가 상대에게도 들립니다')}
-      {tog('ptt','누르는 동안만 듣기','시끄러운 곳에서 — 단추를 누르는 동안만 소리를 보냅니다')}
+      {tog('speakThem','내 말 → '+theirs.label+' 음성','내 말을 번역해 상대 언어로 읽어 줍니다. 끄면 자막만')}
       <label style={{cursor:'pointer',whiteSpace:'nowrap'}}>속도 <select style={{...sel,padding:'1px 4px'}} value={opt.rate} onChange={e=>set({rate:e.target.value})}>
         {['0.8','0.9','1','1.15','1.3'].map(r=><option key={r} value={r}>{r}×</option>)}</select></label>
       <label style={{cursor:'pointer',whiteSpace:'nowrap'}}><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
     </div>
-    {!hasTts&&<InfoBar tone="warn">이 브라우저는 음성 읽기를 지원하지 않습니다 — 자막만 나옵니다</InfoBar>}
+    {!hasTts&&<InfoBar tone="warn">이 브라우저는 음성 읽기를 지원하지 않습니다 — 내 말은 자막으로만 전달됩니다</InfoBar>}
     {hasTts&&!voiceOk&&<InfoBar tone="warn">이 기기에 {theirs.label} 음성이 없습니다 — 휴대폰 설정 › 텍스트 음성 변환(TTS)에서 {theirs.label} 음성을 내려받으면 읽어 줍니다</InfoBar>}
     {sess&&sess.err&&<InfoBar tone="warn">{sess.err}</InfoBar>}
-    {sess&&sess.note&&<InfoBar tone="info">{sess.note}</InfoBar>}
-    {opt.fast&&running&&who==='auto'&&<InfoBar tone="info">⚡ 빠르게는 받아쓰기가 한국어 말을 {theirs.label} 글로 적는 일이 있습니다. 말하기 전에 <b>🇰🇷 나</b> / <b>{theirs.label} 상대</b>를 눌러 주면 정확합니다(🎯 정확하게는 두 언어를 미리 알려 줍니다)</InfoBar>}
-    {opt.fast&&!running&&!sess&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:6}}>⚡ 빠르게: 번역이 1~2초 빨라지는 대신 받아쓰기 요금이 2배(1시간 약 ₩1,300)이고, 숫자·전문용어 정확도가 조금 떨어질 수 있습니다</div>}
+    {!running&&!sess&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:6}}>상대 말은 통역 탭처럼 한국어 자막으로 흐르고, 내 말은 <b>🎙 단추를 누르는 동안</b>만 듣고 {theirs.label} 음성으로 읽어 줍니다(PC는 스페이스 키)</div>}
     {saving&&<InfoBar tone="info">{saving}</InfoBar>}
     {CONV.saved&&!running&&<div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-sm2)'}}>
       <span>✓ 대화 기록 저장됨</span>
@@ -37421,22 +37403,22 @@ function ConvView({setDb,toast,onOpenNote}){
       ?<div>
         <ConvPane segs={segs} view="them" big={big} flip boxRef={boxB} onScroll={scroll('b')} height={'calc(('+H+') / 2)'}
           empty={theirs.id==='zh'?'请说话，会自动翻译成韩语':theirs.id==='ja'?'話してください。韓国語に通訳します':'Please speak — it will be interpreted into Korean'}/>
-        {whoRow}{pttBtn||<div style={{textAlign:'center',fontSize:11,color:'var(--text-label)',padding:'3px 0'}}>▲ 상대 쪽 · ▼ 내 쪽</div>}
+        {pttBtn||<div style={{textAlign:'center',fontSize:11,color:'var(--text-label)',padding:'3px 0'}}>▲ 상대 쪽 · ▼ 내 쪽</div>}
         <ConvPane segs={segs} view="ko" big={big} boxRef={boxA} onScroll={scroll('a')} height={'calc(('+H+') / 2)'}
-          empty={running?'듣고 있습니다 — 아무나 말하면 됩니다':'▶ 시작을 누르고 휴대폰을 두 사람 사이에 두세요'}/>
+          empty={running?'상대 말을 듣고 있습니다 · 내가 말할 때는 🎙 단추를 누르세요':'▶ 시작을 누르고 휴대폰을 두 사람 사이에 두세요'}/>
       </div>
       :<div>
         <ConvPane segs={segs} view="ko" big={big} boxRef={boxA} onScroll={scroll('a')} height={H}
-          empty={running?'듣고 있습니다 — 아무나 말하면 됩니다':<>▶ <b>시작</b>을 누르세요<br/><span style={{fontSize:'var(--fs-sm)'}}>스피커폰 통화: 통화 휴대폰 옆에 이 기기를 두고, 음량을 크게</span></>}/>
-        {whoRow}{pttBtn}
+          empty={running?'상대 말을 듣고 있습니다 · 내가 말할 때는 🎙 단추를 누르세요':<>▶ <b>시작</b>을 누르세요<br/><span style={{fontSize:'var(--fs-sm)'}}>스피커폰 통화: 통화 휴대폰 옆에 이 기기를 두고, 음량을 크게</span></>}/>
+        {pttBtn}
       </div>}
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
       <span>소리는 Alibaba(싱가포르)로, 받아쓴 글은 Anthropic(Claude)으로 전송됩니다 · 음성은 이 기기가 읽습니다</span>
-      {sess&&<span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}회 · 로그</span>}
+      {sess&&<span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}{sess.out?'+'+sess.out.n:''}회 · 로그</span>}
     </div>
   </Card>;
 }
-Object.assign(window,{ConvView,ConvSession,ConvConn,convLang,convWho,convVoice,CONV,CONV_THEIRS});
+Object.assign(window,{ConvView,ConvSession,ConvOut,ConvInConn,ConvOutConn,convLang,convVoice,CONV,CONV_THEIRS});
 </script>
 <script type="text/babel">/* ── LLM 위키 모드 ────────────────────────────────────────────────
    ① 규칙 노트  — 위키의 문법·정돈 기준. 모든 위키 작업의 system 프롬프트가 된다
@@ -38060,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v9.8';
+const TB_VERSION='v10.0';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
