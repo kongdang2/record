@@ -38042,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.1';
+const TB_VERSION='v10.2';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -38813,11 +38813,23 @@ function TbTeam({toast}){
   const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
   const [data,setData]=React.useState(null);const [err,setErr]=React.useState('');const [email,setEmail]=React.useState('');
   const [busy,setBusy]=React.useState(false);const [link,setLink]=React.useState(null);const [del,setDel]=React.useState('');
+  /* 초기 비밀번호 — 넣으면 링크 대신 이메일+비밀번호 계정을 바로 만든다(메일 발송 없음) */
+  const [pw,setPw]=React.useState('');const [pwFor,setPwFor]=React.useState('');const [pw2,setPw2]=React.useState('');const [made,setMade]=React.useState('');
   const redirectTo=location.origin+location.pathname;
+  const pwBad=p=>p&&p.length<8;
   const load=async()=>{setErr('');try{setData(await TB.admin('list'));}catch(e){setErr(e.message);}};
   React.useEffect(()=>{load();},[]);
   const add=async()=>{const e=email.trim().toLowerCase();if(!/.+@.+\..+/.test(e)){toast('이메일 주소를 확인하세요');return;}
-    setBusy(true);try{const r=await TB.admin('add',{email:e,redirectTo});setLink({email:e,url:r.link,kind:r.kind});setEmail('');await load();}catch(x){toast('⚠ '+x.message);}setBusy(false);};
+    if(pwBad(pw)){toast('초기 비밀번호는 8자 이상으로 정하세요');return;}
+    setBusy(true);setMade('');setLink(null);
+    try{const r=await TB.admin('add',pw?{email:e,redirectTo,password:pw}:{email:e,redirectTo});
+      if(pw){if(r&&r.link){setLink({email:e,url:r.link,kind:r.kind});toast('⚠ 서버 함수가 아직 초기 비밀번호를 지원하지 않아 링크를 만들었습니다');}
+        else setMade(e);}
+      else setLink({email:e,url:r.link,kind:r.kind});
+      setEmail('');setPw('');await load();}catch(x){toast('⚠ '+x.message);}setBusy(false);};
+  const setPass=async e=>{if(!pw2||pwBad(pw2)){toast('비밀번호는 8자 이상으로 정하세요');return;}
+    setBusy(true);try{await TB.admin('setpw',{email:e,password:pw2});setPwFor('');setPw2('');setMade(e);toast(e+' 비밀번호를 바꿨습니다');}
+    catch(x){toast('⚠ '+(/unknown|지원|action/i.test(x.message)?'서버 함수(tb-admin)를 새 코드로 배포해야 합니다 — ':'')+x.message);}setBusy(false);};
   const mkLink=async e=>{setBusy(true);try{const r=await TB.admin('link',{email:e,redirectTo});setLink({email:e,url:r.link,kind:r.kind});}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const remove=async e=>{setBusy(true);try{await TB.admin('remove',{email:e});setDel('');await load();toast(e+' 을(를) 명단에서 뺐습니다');}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const copy=async t=>{try{await navigator.clipboard.writeText(t);toast('복사했습니다');}catch(_){const el=document.getElementById('tbLink');if(el){el.focus();el.select();}toast('선택된 링크를 Ctrl+C로 복사하세요');}};
@@ -38836,8 +38848,14 @@ function TbTeam({toast}){
       {err&&<InfoBar tone="warn">{err}</InfoBar>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
         <input id="tbAddEmail" type="email" placeholder="추가할 팀원 이메일" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')add();}} style={{...inputStyle,flex:'1 1 240px',maxWidth:340}}/>
-        <Button disabled={busy} onClick={add}>+ 추가하고 초대 링크 만들기</Button>
+        <input id="tbAddPw" type="text" autoComplete="off" placeholder="초기 비밀번호 (8자 이상, 비우면 링크)" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')add();}}
+          style={{...inputStyle,flex:'1 1 200px',maxWidth:260,borderColor:pwBad(pw)?'var(--color-danger)':undefined}}/>
+        <Button disabled={busy} onClick={add}>{pw?'+ 추가 (이메일+비밀번호)':'+ 추가하고 초대 링크 만들기'}</Button>
       </div>
+      {made&&<div style={{padding:'10px 12px',background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:4,marginBottom:10,fontSize:'var(--fs-sm2)',lineHeight:1.6}}>
+        ✓ <b>{made}</b> 계정에 비밀번호를 정했습니다. 이메일과 비밀번호를 본인에게 직접 알려 주세요(메일은 가지 않습니다).
+        로그인 화면에서 「비밀번호로 로그인」으로 들어오고, 머리줄 🔑에서 본인 비밀번호로 바꿀 수 있습니다.
+        <Button variant="ghost" size="xs" onClick={()=>setMade('')} style={{marginLeft:6}}>닫기</Button></div>}
       {link&&<div style={{padding:'10px 12px',background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,marginBottom:10,fontSize:'var(--fs-sm2)',lineHeight:1.6}}>
         <b>{link.email}</b> {link.kind==='invite'?'초대':'로그인'} 링크 — 메신저나 메일로 보내 주세요. <b>한 번만</b> 쓸 수 있고 일정 시간이 지나면 만료됩니다.
         <div style={{display:'flex',gap:6,marginTop:6}}><input id="tbLink" readOnly value={link.url} onFocus={e=>e.target.select()} style={{...inputStyle,fontFamily:'var(--font-mono)',fontSize:12}}/>
@@ -38855,6 +38873,11 @@ function TbTeam({toast}){
           <td style={{...td,fontVariantNumeric:'tabular-nums',textAlign:'right'}}>{b.cost==null?'—':fmtUsd(b.cost)}</td>
           <td style={{...td,whiteSpace:'nowrap'}}>{m.role!=='owner'&&<>
             <Button variant="ghost" size="xs" disabled={busy} onClick={()=>mkLink(m.email)} title="로그아웃됐을 때 다시 들어올 링크">로그인 링크</Button>
+            {pwFor===m.email
+              ?<span style={{display:'inline-flex',gap:4,alignItems:'center'}}><input type="text" autoComplete="off" autoFocus placeholder="새 비밀번호 8자 이상" value={pw2} onChange={e=>setPw2(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter')setPass(m.email);if(e.key==='Escape'){setPwFor('');setPw2('');}}} style={{...inputStyle,width:150,padding:'3px 6px',fontSize:'var(--fs-sm)'}}/>
+                <Button size="xs" disabled={busy} onClick={()=>setPass(m.email)}>저장</Button><Button variant="ghost" size="xs" onClick={()=>{setPwFor('');setPw2('');}}>취소</Button></span>
+              :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>{setPwFor(m.email);setPw2('');}} title="비밀번호를 잊었을 때 관리자가 새로 정해 줍니다">비밀번호 지정</Button>}
             {del===m.email?<><Button variant="danger" size="xs" disabled={busy} onClick={()=>remove(m.email)}>빼기 확인</Button><Button variant="ghost" size="xs" onClick={()=>setDel('')}>취소</Button></>
               :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>setDel(m.email)}>명단에서 빼기</Button>}</>}</td>
         </tr>;})}
@@ -38864,7 +38887,7 @@ function TbTeam({toast}){
         </tbody></table></div>}
       {data&&!data.rows&&<InfoBar tone="warn">요금을 보려면 tb-admin 함수를 새 코드로 다시 배포하세요</InfoBar>}
       {data&&data.rows&&<TbCostNote/>}
-      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:8,lineHeight:1.6}}>명단에서 빼면 그 계정은 바로 로그인이 막히고(기록은 남음), 다시 추가하면 풀립니다. 비용은 모두 관리자 계정으로 청구됩니다. 한도는 없고 사용 시간만 기록합니다.</div>
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:8,lineHeight:1.6}}>초기 비밀번호를 넣고 추가하면 메일 없이 이메일+비밀번호로 바로 로그인할 수 있습니다(비우면 예전처럼 링크). 비밀번호를 잊은 팀원은 「비밀번호 지정」으로 새로 정해 주세요. 명단에서 빼면 그 계정은 바로 로그인이 막히고(기록은 남음), 다시 추가하면 풀립니다. 비용은 모두 관리자 계정으로 청구됩니다. 한도는 없고 사용 시간만 기록합니다.</div>
     </Card>
   </div>;
 }
