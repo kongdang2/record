@@ -38833,7 +38833,7 @@ function TbTeam({toast}){
   const setPass=async e=>{if(!pw2||pwBad(pw2)){toast('비밀번호는 8자 이상으로 정하세요');return;}
     const mm=((data&&data.members)||[]).find(x=>x.email===e);
     const warn='⚠ '+e+' 은(는) 이미 로그인해서 쓰고 있는 계정입니다.\n재설정하면 팀원이 정한 비밀번호로는 더 이상 로그인할 수 없습니다.\n비밀번호를 잊은 경우에만 계속하세요. 재설정할까요?';
-    let force=false;if(mm&&mm.lastSignIn){if(!confirm(warn))return;force=true;}
+    let force=false;if(mm&&mm.lastSignIn&&mm.initialPw!==true){if(!confirm(warn))return;force=true;}
     setBusy(true);try{
       /* 서버도 이미 쓰는 계정이면 force 없이는 바꾸지 않는다(409 confirm) */
       try{await TB.admin('setpw',force?{email:e,password:pw2,force:true}:{email:e,password:pw2});}
@@ -38886,7 +38886,7 @@ function TbTeam({toast}){
               ?<span style={{display:'inline-flex',gap:4,alignItems:'center'}}><input type="text" autoComplete="off" autoFocus placeholder="새 비밀번호 8자 이상" value={pw2} onChange={e=>setPw2(e.target.value)}
                   onKeyDown={e=>{if(e.key==='Enter')setPass(m.email);if(e.key==='Escape'){setPwFor('');setPw2('');}}} style={{...inputStyle,width:150,padding:'3px 6px',fontSize:'var(--fs-sm)'}}/>
                 <Button size="xs" disabled={busy} onClick={()=>setPass(m.email)}>저장</Button><Button variant="ghost" size="xs" onClick={()=>{setPwFor('');setPw2('');}}>취소</Button></span>
-              :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>{setPwFor(m.email);setPw2('');}} title={m.lastSignIn?'이미 쓰고 있는 계정 — 비밀번호를 잊었을 때만 재설정하세요':'처음 로그인할 비밀번호를 정해 줍니다'}>{m.lastSignIn?'비밀번호 재설정':'비밀번호 지정'}</Button>}
+              :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>{setPwFor(m.email);setPw2('');}} title={m.lastSignIn&&m.initialPw!==true?'이미 쓰고 있는 계정 — 비밀번호를 잊었을 때만 재설정하세요':'처음 로그인할 비밀번호를 정해 줍니다'}>{m.lastSignIn&&m.initialPw!==true?'비밀번호 재설정':'비밀번호 지정'}</Button>}
             {del===m.email?<><Button variant="danger" size="xs" disabled={busy} onClick={()=>remove(m.email)}>빼기 확인</Button><Button variant="ghost" size="xs" onClick={()=>setDel('')}>취소</Button></>
               :<Button variant="ghost" size="xs" disabled={busy} onClick={()=>setDel(m.email)}>명단에서 빼기</Button>}</>}</td>
         </tr>;})}
