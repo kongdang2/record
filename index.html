@@ -38832,7 +38832,7 @@ function TbTeam({toast}){
       setEmail('');setPw('');await load();}catch(x){toast('⚠ '+x.message);}setBusy(false);};
   const setPass=async e=>{if(!pw2||pwBad(pw2)){toast('비밀번호는 8자 이상으로 정하세요');return;}
     const mm=((data&&data.members)||[]).find(x=>x.email===e);
-    const warn='⚠ '+e+' 은(는) 이미 로그인해서 쓰고 있는 계정입니다.\n재설정하면 팀원이 정한 비밀번호로는 더 이상 로그인할 수 없습니다.\n비밀번호를 잊은 경우에만 계속하세요. 재설정할까요?';
+    const warn='⚠ '+e+' 은(는) 이미 로그인해서 쓰고 있는 계정입니다.\n'+(mm&&mm.initialPw===false?'팀원이 직접 정한 비밀번호가 있습니다. ':'팀원이 비밀번호를 정했는지 기록이 없습니다(정했을 수 있음). ')+'재설정하면 팀원이 정한 비밀번호로는 더 이상 로그인할 수 없습니다.\n비밀번호를 잊은 경우에만 계속하세요. 재설정할까요?';
     let force=false;if(mm&&mm.lastSignIn&&mm.initialPw!==true){if(!confirm(warn))return;force=true;}
     setBusy(true);try{
       /* 서버도 이미 쓰는 계정이면 force 없이는 바꾸지 않는다(409 confirm) */
@@ -38873,7 +38873,7 @@ function TbTeam({toast}){
       {data&&<div style={{overflowX:'auto'}}><table style={{borderCollapse:'collapse',width:'100%',minWidth:820}}>
         <thead><tr><th style={th}>이메일</th><th style={th}>역할</th><th style={th}>이번 달 통역</th><th style={th}>이번 달 전사</th><th style={th}>이번 달 요금</th><th style={th}>지난달 통역·전사</th><th style={th}>지난달 요금</th><th style={th}></th></tr></thead>
         <tbody>{(data.members||[]).map(m=>{const a=u(m,'thisMonth'),b=u(m,'lastMonth');return <tr key={m.email}>
-          <td style={td}>{m.email}{m.banned&&<span style={{color:'var(--color-danger)',marginLeft:6}}>차단됨</span>}{!m.lastSignIn?<span style={{color:'var(--text-label)',marginLeft:6}}>· 아직 로그인 안 함</span>:m.initialPw===true?<span style={{color:'#B45309',marginLeft:6}}>· 초기 비번 그대로</span>:m.initialPw===false?<span style={{color:'var(--text-label)',marginLeft:6}}>· 본인 비번 설정함</span>:null}</td>
+          <td style={td}>{m.email}{m.banned&&<span style={{color:'var(--color-danger)',marginLeft:6}}>차단됨</span>}{!m.lastSignIn?<span style={{color:'var(--text-label)',marginLeft:6}}>· 아직 로그인 안 함</span>:m.initialPw===true?<span style={{color:'#B45309',marginLeft:6}}>· 초기 비번 그대로</span>:m.initialPw===false?<span style={{color:'var(--text-label)',marginLeft:6}}>· 본인 비번 설정함</span>:<span style={{color:'var(--text-label)',marginLeft:6}} title='링크로 들어왔거나 2026-10-16 이전에 비밀번호를 정해 기록이 없습니다. 본인이 🔑로 한 번 다시 저장하면 표시됩니다'>· 비번 기록 없음</span>}</td>
           <td style={td}>{m.role==='owner'?'관리자':'팀원'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.live?fmtMin(a.live):'—'}</td>
           <td style={{...td,fontVariantNumeric:'tabular-nums'}}>{a.stt?fmtMin(a.stt):'—'}{a.polish?' · 정리 '+a.polish+'건':''}</td>
