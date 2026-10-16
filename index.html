@@ -38042,7 +38042,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.7';
+const TB_VERSION='v10.8';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -39010,7 +39010,7 @@ function TbShell({user,role,onLogout}){
     style={{border:'none',borderBottom:'2px solid '+(tab===t.id?'var(--wb-ink, #1F2A37)':'transparent'),background:'transparent',padding:mobile?'10px 4px':'10px 14px',
       fontSize:mobile?13:'var(--fs-md)',fontWeight:tab===t.id?700:500,color:tab===t.id?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit',flex:mobile?1:'none',whiteSpace:'nowrap'}}>{t.label}</button>;
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
-    <AppHeader mark="🗣" title="통번역" version={TB_VERSION} tools={<>
+    <AppHeader mark="🗣" title="통번역" version={role==='owner'?TB_VERSION:undefined} tools={<>
       <TbUsageChip role={role} onOpenSettings={()=>setTab('me')}/>
       {!mobile&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}{role==='owner'?' · 관리자':''}</span>}
       {role==='owner'&&<Button variant={tab==='me'?'secondary':'ghost'} size="xs" onClick={()=>setTab(tab==='me'?'live':'me')} title="설정">⚙ 설정{newModels&&newModels.length?' 🆕':''}</Button>}
