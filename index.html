@@ -37301,6 +37301,7 @@ class LiveSession{
   bump(){if(this._raf)return;this._raf=requestAnimationFrame(()=>{this._raf=0;this.onChange&&this.onChange();});}
   get segs(){return this.conns.flatMap(c=>c.segs);}
   async start(){
+    if(await TbVer.check())throw new Error('새 버전('+TbVer.latest+')이 나왔습니다 — 화면 위 「새로고침」을 누른 뒤 다시 시작하세요');
     if(Store.mode!=='supabase')throw new Error('통역은 클라우드(Supabase) 연결이 필요합니다 — 키가 서버에 있기 때문입니다');
     if(this.opt.mode==='asr'&&claudeMode()==='none')throw new Error('정확도 우선은 Claude 번역을 씁니다 — 설정 › Claude 연결을 먼저 확인하거나 ⚡ 속도 우선을 고르세요');
     await this.openMic();
@@ -38593,7 +38594,14 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.11';
+const TB_VERSION='v10.12';
+/* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
+const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
+const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
+const TbVer={latest:null,async check(){
+  try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)return false;const j=await r.json();
+    if(j&&j.version&&tbVerNewer(j.version,TB_VERSION)){this.latest=j.version;window.dispatchEvent(new Event('tb-newver'));return true;}}catch(_){}
+  return false;}};
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
@@ -39553,6 +39561,11 @@ function TbShell({user,role,onLogout}){
   const [cfg,setCfg]=React.useState(()=>window.TB_CFG||{});
   const [newModels,setNewModels]=React.useState(null);
   const [pwOpen,setPwOpen]=React.useState(false);
+  const [newVer,setNewVer]=React.useState(null);
+  React.useEffect(()=>{const on=()=>setNewVer(TbVer.latest);window.addEventListener('tb-newver',on);
+    TbVer.check();const iv=setInterval(()=>TbVer.check(),10*60*1000);
+    const vis=()=>{if(!document.hidden)TbVer.check();};document.addEventListener('visibilitychange',vis);
+    return()=>{window.removeEventListener('tb-newver',on);clearInterval(iv);document.removeEventListener('visibilitychange',vis);};},[]);
   /* 링크로 처음 들어온 사람에게 비밀번호 정하기를 한 번 권한다 */
   const [pwHint,setPwHint]=React.useState(()=>{try{return localStorage.getItem('tb.usePw')!=='1'&&localStorage.getItem('tb.pwHint')!=='x';}catch(_){return false;}});
   const dismissPwHint=()=>{setPwHint(false);try{localStorage.setItem('tb.pwHint','x');}catch(_){}};
@@ -39577,6 +39590,8 @@ function TbShell({user,role,onLogout}){
     <nav style={{display:'flex',gap:mobile?0:4,borderBottom:'1px solid var(--border-default)',padding:mobile?'0 4px':'0 16px',background:'#fff',position:'sticky',top:'env(safe-area-inset-top, 0px)',zIndex:20}}>{tabs.map(tabBtn)}</nav>
     <main style={{flex:1,minWidth:0,padding:mobile?'10px 10px 24px':'16px 20px'}}>
       {loadErr&&<InfoBar tone="warn">기록을 불러오지 못했습니다 — {loadErr}</InfoBar>}
+      {newVer&&<div style={{marginBottom:10}}><InfoBar tone="warn">🔄 새 버전({newVer})이 나왔습니다. {LiveSession.all.size?'지금 통역을 마치고 저장한 뒤 ':''}새로고침해 주세요.
+        <Button size="xs" onClick={()=>location.reload()} style={{marginLeft:8}}>새로고침</Button></InfoBar></div>}
       {initPw&&<div style={{marginBottom:10}}><InfoBar>🔑 관리자가 정해 준 초기 비밀번호로 로그인했습니다. 본인만 아는 비밀번호로 바꿔 주세요.
         <button type="button" onClick={()=>setPwOpen(true)} style={{marginLeft:8,border:'none',background:'none',color:'var(--color-accent, #2563eb)',cursor:'pointer',fontSize:'inherit',fontFamily:'inherit',textDecoration:'underline'}}>지금 바꾸기</button></InfoBar></div>}
       {!initPw&&pwHint&&tab!=='me'&&<div style={{marginBottom:10}}><InfoBar>🔑 비밀번호를 정해 두면 다음부터 로그인 메일 없이 바로 들어올 수 있습니다.
