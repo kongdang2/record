@@ -36787,6 +36787,16 @@ class LiveSession{
   async start(){
     if(Store.mode!=='supabase')throw new Error('통역은 클라우드(Supabase) 연결이 필요합니다 — 키가 서버에 있기 때문입니다');
     if(this.opt.mode==='asr'&&claudeMode()==='none')throw new Error('정확도 우선은 Claude 번역을 씁니다 — 설정 › Claude 연결을 먼저 확인하거나 ⚡ 속도 우선을 고르세요');
+    await this.openMic();
+    this.running=true;this.t0=Date.now();this.err='';this.note='';LiveSession.all.add(this);
+    if(this.opt.record!==false)this.startRec();
+    try{if(navigator.wakeLock)this.lock=await navigator.wakeLock.request('screen');}catch(_){}
+    try{KeepAwake.on();}catch(_){}
+    await this.connect();
+    this.rot=setInterval(()=>this.rotate(),LIVE_ROTATE_MS);
+  }
+  /* 마이크 + 16kHz 변환 그래프. 홈 화면 등으로 나갔다 오면 다시 붙인다 */
+  async openMic(){
     const raw=!this.opt.clean;
     this.stream=await navigator.mediaDevices.getUserMedia({audio:{
       deviceId:this.opt.device?{exact:this.opt.device}:undefined,channelCount:1,
@@ -36814,12 +36824,29 @@ class LiveSession{
     };
     src.connect(proc);
     const mute=ctx.createGain();mute.gain.value=0;proc.connect(mute);mute.connect(ctx.destination);
-    this.running=true;this.t0=Date.now();this.err='';
-    if(this.opt.record!==false)this.startRec();
-    try{if(navigator.wakeLock)this.lock=await navigator.wakeLock.request('screen');}catch(_){}
-    try{KeepAwake.on();}catch(_){}
-    await this.connect();
-    this.rot=setInterval(()=>this.rotate(),LIVE_ROTATE_MS);
+  }
+  /* 앱 밖(홈 화면·다른 앱)에 나갔다 돌아왔을 때 — 휴대폰이 마이크를 멈추므로 다시 붙이고 통역 연결도 잇는다 */
+  async wake(){
+    if(!this.running||this.waking)return;this.waking=true;
+    const gap=this.hiddenAt?Math.round((Date.now()-this.hiddenAt)/1000):0;this.hiddenAt=0;
+    try{
+      const tr=this.stream&&this.stream.getAudioTracks()[0];
+      try{if(this.ctx&&this.ctx.state!=='running')await this.ctx.resume();}catch(_){}
+      if(!tr||tr.readyState==='ended'||tr.muted||!this.ctx||this.ctx.state!=='running'){
+        this.log('마이크 다시 연결');
+        try{this.proc&&(this.proc.onaudioprocess=null);}catch(_){}
+        const old=this.stream;try{this.ctx&&this.ctx.close();}catch(_){}
+        await this.openMic();
+        try{old&&old.getTracks().forEach(t=>t.stop());}catch(_){}
+        if(this.rec&&this.rec.state!=='inactive'){try{this.rec.stop();}catch(_){}}   /* onstop이 새 마이크로 녹음을 다시 시작 */
+        else if(this.opt.record!==false)this.startRec();
+      }
+      try{if(navigator.wakeLock)this.lock=await navigator.wakeLock.request('screen');}catch(_){}
+      if(!this.active&&!this.pendingConn)this.connect();
+      if(gap>=2){this.gaps=(this.gaps||[]);this.gaps.push(gap);
+        this.note='앱 밖에 나가 있던 약 '+gap+'초 동안은 녹음·통역되지 않았습니다. 통역 중에는 이 화면을 켜 두세요.';}
+    }catch(e){this.fail('마이크를 다시 켜지 못했습니다 — '+(e.message||e));}
+    this.waking=false;this.bump();
   }
   /* 녹음 — 같은 마이크 소리를 파일로. 15분마다 조각내서 나중에 전사하기 쉽게 */
   startRec(){
@@ -36833,7 +36860,7 @@ class LiveSession{
       if(blob.size>2000)this.recParts.push({blob,t0,sec:Math.round((Date.now()-t0)/1000)});
       if(this.running)this.startRec();else{this.rec=null;this.recDone&&this.recDone();}
     };
-    rec.start(1000);
+    try{rec.start(1000);}catch(e){this.log('녹음 다시 시작 대기: '+e.message);this.rec=null;return;}   /* 마이크가 끊긴 상태 — wake()에서 다시 시작 */
     clearTimeout(this.recT);this.recT=setTimeout(()=>{if(this.running&&this.rec===rec)try{rec.stop();}catch(_){}} ,LIVE_REC_SPLIT);
   }
   /* 녹음이 다 닫힐 때까지 (최대 4초) */
@@ -36892,7 +36919,7 @@ class LiveSession{
   rotate(){if(!this.running||this.pendingConn)return;this.connect();}
   fail(msg){this.err=msg;this.log('⚠ '+msg);if(!this.conns.some(c=>c.ready))this.stop(true);this.bump();}
   stop(hard){
-    const was=this.running;this.running=false;clearInterval(this.rot);clearTimeout(this.recT);
+    const was=this.running;this.running=false;LiveSession.all.delete(this);clearInterval(this.rot);clearTimeout(this.recT);
     if(was&&!this.tEnd)this.tEnd=Date.now();
     try{this.rec&&this.rec.state!=='inactive'&&this.rec.stop();}catch(_){}
     try{this.proc&&(this.proc.onaudioprocess=null);}catch(_){}
@@ -37008,6 +37035,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
     </div>
 
     {sess&&sess.err&&<InfoBar tone="warn">{sess.err}</InfoBar>}
+    {sess&&sess.note&&!sess.err&&<InfoBar tone="warn">⚠ {sess.note}</InfoBar>}
     {saving&&<InfoBar tone="info">{saving}</InfoBar>}
     {saved&&!running&&<div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-sm2)'}}>
       <span>✓ <b>{saved.title}</b> 저장됨{LIVE.saved.audio?' · 녹음 '+LIVE.saved.audio+'개':''}</span>
@@ -37112,6 +37140,11 @@ class ConvOutConn extends LiveConn{
 }
 /* 내 말 세션 — 마이크는 없고 본 세션(ConvSession)이 단추를 누르는 동안만 소리를 나눠 준다.
    누를 때 연결을 열고(여는 동안의 소리는 queue 에 모였다가 열리면 보낸다) 떼면 session.finish 로 닫는다 */
+/* 진행 중인 통역 — 화면을 벗어났다 돌아오면 이어 붙인다 */
+LiveSession.all=new Set();
+document.addEventListener('visibilitychange',()=>{
+  for(const x of LiveSession.all){if(document.hidden)x.hiddenAt=x.hiddenAt||Date.now();else x.wake();}});
+window.addEventListener('pageshow',()=>{if(!document.hidden)for(const x of LiveSession.all)x.wake();});
 class ConvOut extends LiveSession{
   constructor(main){super({...main.opt},null);this.main=main;this.t0=main.t0;this.running=true;this.fails=0;}
   log(m){this.main.log('[내 말] '+m);}
@@ -37393,6 +37426,7 @@ function ConvView({setDb,toast,onOpenNote}){
     {!hasTts&&<InfoBar tone="warn">이 브라우저는 음성 읽기를 지원하지 않습니다 — 내 말은 자막으로만 전달됩니다</InfoBar>}
     {hasTts&&!voiceOk&&<InfoBar tone="warn">이 기기에 {theirs.label} 음성이 없습니다 — 휴대폰 설정 › 텍스트 음성 변환(TTS)에서 {theirs.label} 음성을 내려받으면 읽어 줍니다</InfoBar>}
     {sess&&sess.err&&<InfoBar tone="warn">{sess.err}</InfoBar>}
+    {sess&&sess.note&&!sess.err&&<InfoBar tone="warn">⚠ {sess.note}</InfoBar>}
     {!running&&!sess&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:6}}>상대 말은 통역 탭처럼 한국어 자막으로 흐르고, 내 말은 <b>🎙 단추를 누르는 동안</b>만 듣고 {theirs.label} 음성으로 읽어 줍니다(PC는 스페이스 키)</div>}
     {saving&&<InfoBar tone="info">{saving}</InfoBar>}
     {CONV.saved&&!running&&<div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-sm2)'}}>
@@ -38042,7 +38076,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.8';
+const TB_VERSION='v10.9';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
