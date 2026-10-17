@@ -37324,7 +37324,7 @@ class LiveSession{
     const proc=ctx.createScriptProcessor(4096,1,1);this.proc=proc;
     const ratio=ctx.sampleRate/LIVE_RATE;let carry=new Float32Array(0);let pos=0;
     proc.onaudioprocess=e=>{
-      const inp=e.inputBuffer.getChannelData(0);
+      const inp=e.inputBuffer.getChannelData(0);const mt=this.stream&&this.stream.getAudioTracks()[0];if(mt&&mt.readyState==='live'&&!mt.muted)this.lastAudio=Date.now();
       let pk=0;for(let i=0;i<inp.length;i+=16){const a=Math.abs(inp[i]);if(a>pk)pk=a;}
       this.level=this.level*0.6+pk*0.4;
       /* 16kHz로 (브라우저가 이미 16kHz면 그대로) */
@@ -37344,7 +37344,8 @@ class LiveSession{
   /* 앱 밖(홈 화면·다른 앱)에 나갔다 돌아왔을 때 — 휴대폰이 마이크를 멈추므로 다시 붙이고 통역 연결도 잇는다 */
   async wake(){
     if(!this.running||this.waking)return;this.waking=true;
-    const gap=this.hiddenAt?Math.round((Date.now()-this.hiddenAt)/1000):0;this.hiddenAt=0;
+    /* 실제로 마이크 소리가 멈췄던 시간 — PC처럼 뒤에서도 계속 들었으면 0 */
+    const gap=this.hiddenAt&&this.lastAudio?Math.round((Date.now()-Math.max(this.lastAudio,this.hiddenAt))/1000):0;this.hiddenAt=0;
     try{
       const tr=this.stream&&this.stream.getAudioTracks()[0];
       try{if(this.ctx&&this.ctx.state!=='running')await this.ctx.resume();}catch(_){}
@@ -38592,7 +38593,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.10';
+const TB_VERSION='v10.11';
 const TB_KIND='tbrec';
 const TB_LANGS=[{id:'zh',label:'중국어'},{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지'}];
 const TB_SETUP_SQL=`-- 통번역 팀 앱 — 한 번만 실행 (다시 실행해도 안전)
