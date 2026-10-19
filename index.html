@@ -36167,96 +36167,16 @@ html,body{overscroll-behavior-y:contain;}
 });
 
 </script>
-<script type="text/babel">/* 저장·인증 계층: Supabase(설정 시) 또는 로컬(localStorage). 컬렉션 단위 upsert. */
+<script type="text/babel">/* 저장·인증 계층: Supabase 로그인·설정, Claude 호출, 음성 전사 */
 const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4);
 const pad2=n=>String(n).padStart(2,'0');
 const isoDate=d=>d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
 const todayISO=()=>isoDate(new Date());
-const shiftDay=(iso,n)=>{const d=new Date(iso+'T00:00:00');d.setDate(d.getDate()+n);return isoDate(d);};
 const nowStamp=()=>new Date().toISOString();
 
 async function sha256(s){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');}
 function loadScript(src){return new Promise((ok,err)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>err(new Error('라이브러리를 내려받지 못했습니다 ('+src.split('/')[2]+') — 인터넷 연결 또는 사내망 차단 확인'));document.head.appendChild(s);});}
-
-const SUPABASE_SQL=`-- Supabase SQL Editor에서 1회 실행
-create table if not exists pms_collections (
-  user_id uuid references auth.users(id) on delete cascade,
-  kind text not null,
-  data jsonb not null default '[]',
-  updated_at timestamptz default now(),
-  primary key (user_id, kind)
-);
-alter table pms_collections enable row level security;
-create policy "own rows" on pms_collections for all
-  using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
-
-/* 5단계: 행 단위 저장. 메일·노트 한 건이 한 행이 되어 바뀐 것만 저장된다.
-   deleted_at 이 채워진 행 = 휴지통(30일 뒤 자동 삭제) */
-const ITEMS_SQL=`-- 행 단위 저장 전환 — 몇 번을 다시 실행해도 안전합니다
-create table if not exists pms_items (
-  user_id uuid references auth.users(id) on delete cascade,
-  kind text not null,
-  item_id text not null,
-  data jsonb not null,
-  updated_at timestamptz default now(),
-  deleted_at timestamptz,
-  primary key (user_id, kind, item_id)
-);
-alter table pms_items enable row level security;
-drop policy if exists "own items" on pms_items;
-create policy "own items" on pms_items for all
-  using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create index if not exists pms_items_live_idx on pms_items (user_id, kind) where deleted_at is null;`;
-const TRASH_DAYS=30;
 const isMissingTable=e=>e&&(e.code==='PGRST205'||e.code==='42P01'||/Could not find the table|does not exist/i.test(e.message||''));
-const titleOf=it=>it&&(it.subject||it.title||it.label||it.email)||'(제목 없음)';
-
-function seedData(){
-  const t=todayISO(),y=new Date().getFullYear(),m=pad2(new Date().getMonth()+1);
-  const d=n=>shiftDay(t,n);
-  return {
-    accounts:[
-      {id:'work',label:'회사',provider:'outlook',email:'me@company.co.kr',status:'manual',note:'사내 PC: Outlook 연동 · 외부: 수동 가져오기'},
-      {id:'personal',label:'개인',provider:'gmail',email:'me@gmail.com',status:'ready',note:'Gmail API OAuth — Client ID 입력 후 연결'}
-    ],
-    mails:[
-      {id:uid(),acc:'work',folder:'inbox',from:'김부장 <kim@company.co.kr>',to:'me@company.co.kr',subject:'9월 손익추정 검토 요청',date:t+'T09:12:00',body:'9월 추정 자료 검토 부탁합니다.\n\n- 기준가격 반영 여부\n- 판매정보 업데이트\n\n금요일 오전 회의 전까지 회신 주세요.',star:true,read:false,tags:['손익추정']},
-      {id:uid(),acc:'work',folder:'inbox',from:'IT지원 <it@company.co.kr>',to:'all@company.co.kr',subject:'[안내] 사내 메일 외부 접속 정책 변경',date:d(-1)+'T14:30:00',body:'외부에서는 OWA(웹 메일)만 접근 가능하며 IMAP/POP은 차단됩니다.\n메일 자동 전달은 보안 정책상 금지됩니다.',star:false,read:true,tags:[]},
-      {id:uid(),acc:'personal',folder:'inbox',from:'국민은행 <noreply@kbstar.com>',to:'me@gmail.com',subject:'9월 카드 이용대금 명세서',date:d(-1)+'T08:00:00',body:'이용대금 명세서가 발행되었습니다. 결제일: '+y+'-'+m+'-25',star:false,read:true,tags:['개인']},
-      {id:uid(),acc:'personal',folder:'inbox',from:'박지훈 <jihoon@gmail.com>',to:'me@gmail.com',subject:'주말 등산 일정',date:d(-2)+'T20:15:00',body:'토요일 7시 북한산 입구에서 만나자. 우이령 코스 어때?',star:false,read:false,tags:['개인']},
-      {id:uid(),acc:'work',folder:'sent',from:'me@company.co.kr',to:'kim@company.co.kr',subject:'RE: 8월 확정 손익 보고',date:d(-3)+'T17:40:00',body:'8월 확정분 첨부합니다. 차이분석은 별도 보고 예정입니다.',star:false,read:true,tags:['손익추정']}
-    ],
-    events:[
-      {id:uid(),title:'손익추정 검토 회의',date:t,start:'10:00',end:'11:00',cal:'work',status:'todo',category:'손익추정',repeat:'none',notes:'김부장 요청 건. [[손익추정 프로세스]] 참고'},
-      {id:uid(),title:'주간 팀 미팅',date:t,start:'14:00',end:'14:30',cal:'work',status:'todo',category:'정기회의',repeat:'weekly',notes:''},
-      {id:uid(),title:'9월 기준가격 입력 마감',date:d(2),dateEnd:'',start:'',end:'',cal:'work',status:'doing',category:'손익추정',repeat:'none',notes:'MOPJ · 두바이 · 환율'},
-      {id:uid(),title:'사업계획 워크숍',date:d(3),dateEnd:d(6),start:'',end:'',cal:'work',status:'todo',category:'사업계획',repeat:'none',notes:'3박 4일'},
-      {id:uid(),title:'북한산 등산',date:d(5),start:'07:00',end:'12:00',cal:'personal',status:'todo',category:'취미',repeat:'none',notes:'우이령 코스'},
-      {id:uid(),title:'카드 결제일',date:y+'-'+m+'-25',start:'',end:'',cal:'personal',status:'todo',category:'생활',repeat:'monthly',notes:''},
-      {id:uid(),title:'8월 차이분석 보고서',date:d(-2),start:'',end:'',cal:'work',status:'done',category:'손익추정',repeat:'none',notes:''}
-    ],
-    notes:[
-      {id:uid(),title:'홈',scope:'work',tags:['index'],updated:nowStamp(),md:'# 개인 위키\n\n업무와 비업무 지식을 한 곳에 축적합니다. `[[제목]]`으로 노트를 연결하세요.\n\n## 업무\n- [[손익추정 프로세스]]\n- [[기준가격 산정 메모]]\n\n## 비업무\n- [[등산 코스 정리]]\n\n## 규칙\n- 노트 제목은 명사구\n- 출처가 있으면 하단에 `출처:` 표기\n- 미완성은 `#draft` 태그'},
-      {id:uid(),title:'손익추정 프로세스',scope:'work',tags:['손익추정','프로세스'],updated:nowStamp(),md:'# 손익추정 프로세스\n\n매월 반복되는 추정 → 확정 → 분석 흐름.\n\n| 단계 | 시점 | 산출물 |\n|---|---|---|\n| 추정 | 월초 | 기준가격·판매·구매 입력 |\n| 확정 | 월말+5일 | 제조원가명세서 |\n| 분석 | 확정 후 | 차이분석 보고 |\n\n- [ ] 9월 기준가격 입력\n- [x] 8월 확정 마감\n\n관련: [[기준가격 산정 메모]]'},
-      {id:uid(),title:'기준가격 산정 메모',scope:'work',tags:['손익추정','시황'],updated:nowStamp(),md:'# 기준가격 산정 메모\n\n> 유가·납사·환율은 기억이 아니라 **최신 검색**으로 확인한다.\n\n1. 두바이/브렌트 최근 4주 평균\n2. MOPJ 스프레드 반영\n3. 환율은 월평균 예상치\n\n연결: [[손익추정 프로세스]]'},
-      {id:uid(),title:'등산 코스 정리',scope:'personal',tags:['취미'],updated:nowStamp(),md:'# 등산 코스 정리\n\n## 북한산\n- 우이령: 완만, 왕복 3h\n- 백운대: 급경사, 왕복 4h\n\n## 준비물\n- 물 1L, 행동식, 스틱'}
-    ]
-  };
-}
-
-const KINDS=['accounts','mails','events','notes'];
-/* 구버전 데이터 보정: 노트 folder→scope, 일정 category·기간, 계정 라벨 정리 */
-function migrateDb(db){
-  if(Array.isArray(db.notes))db.notes=db.notes.map(n=>n.scope?n:{...n,scope:(n.folder==='개인'||n.folder==='personal')?'personal':'work'});
-  /* 마일스톤은 없앴다 — 남아 있던 값은 비고 아래에 옮겨 두고 필드는 버린다 */
-  if(Array.isArray(db.events))db.events=db.events.map(e=>{
-    const ms=Array.isArray(e.milestones)?e.milestones.filter(m=>m&&m.date):[];
-    const o={...e,category:e.category||'',dateEnd:e.dateEnd||''};
-    if(ms.length)o.notes=(o.notes?o.notes+'\n\n':'')+'## 지난 마일스톤\n'+ms.map(m=>'- '+m.date+' '+(m.title||'')).join('\n');
-    delete o.milestones;return o;});
-  if(Array.isArray(db.accounts))db.accounts=db.accounts.map(a=>({...a,label:(a.label||'').replace(/\s*\((Outlook|Gmail|gmail|outlook)\)\s*$/,'').trim()||a.label}));
-  return db;
-}
 const SB_CDN='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js';
 /* Supabase 오류를 사람이 읽을 수 있는 한국어로. 단계별 원인 → 조치 */
 function explainSbError(e){
@@ -36276,8 +36196,6 @@ const Store={
   /* 설정 우선순위: 이 브라우저에 저장한 값 > 호스팅 폴더의 pms.config.js(window.PMS_CONFIG) */
   cfg:{...(window.PMS_CONFIG||{}),...JSON.parse(localStorage.getItem('pms.cfg')||'{}')},
   mode:'local',sb:null,user:null,
-  rowMode:false,          /* true = 행 단위 저장(pms_items) · false = 예전 묶음 저장(pms_collections) */
-  snap:{},                /* 마지막으로 저장된 내용 — 무엇이 바뀌었는지 가려내는 기준 */
   saveCfg(c){this.cfg={...this.cfg,...c};localStorage.setItem('pms.cfg',JSON.stringify(this.cfg));},
   get cloudReady(){return !!(this.cfg.supabaseUrl&&this.cfg.supabaseKey);},
   async init(){
@@ -36291,16 +36209,6 @@ const Store={
     return this.user;
   },
   userOf(u){return {id:u.id,email:u.email,name:u.email.split('@')[0]};},
-  /* 설정 화면의 "연결 테스트": 저장 전에 URL·키·테이블을 단계별로 점검 */
-  async testConnection(url,key){
-    if(!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test((url||'').trim()))return {ok:false,step:'url',msg:'URL 형식이 아닙니다 — https://xxxx.supabase.co'};
-    if(!(key||'').trim().startsWith('eyJ')&&!(key||'').trim().startsWith('sb_'))return {ok:false,step:'key',msg:'anon key 형식이 아닙니다 — eyJ… 또는 sb_publishable_… 로 시작'};
-    try{ if(!window.supabase) await loadScript(SB_CDN); }catch(e){return {ok:false,step:'cdn',msg:'supabase-js 라이브러리를 내려받지 못했습니다 — 인터넷 연결 확인'};}
-    const sb=window.supabase.createClient(url.trim(),key.trim());
-    const {error}=await sb.from('pms_collections').select('kind',{head:true,count:'exact'});
-    if(error)return {ok:false,step:/table|relation|PGRST205/i.test(error.message+error.code)?'table':'key',msg:explainSbError(error)};
-    return {ok:true,step:'done',msg:'연결 성공 · 테이블 확인됨 — 저장하면 새로 고침 후 클라우드 모드로 시작합니다'};
-  },
   async signIn(email,pw){
     if(this.mode==='supabase'){const {data,error}=await this.sb.auth.signInWithPassword({email,password:pw});if(error)throw new Error(explainSbError(error));this.user=this.userOf(data.user);return this.user;}
     const users=JSON.parse(localStorage.getItem('pms.users')||'{}');const h=await sha256(email+':'+pw);
@@ -36308,185 +36216,7 @@ const Store={
     else if(users[email]!==h)throw new Error('비밀번호가 일치하지 않습니다');
     this.user={id:'local:'+email,email,name:email.split('@')[0]};sessionStorage.setItem('pms.session',JSON.stringify(this.user));return this.user;
   },
-  async signUp(email,pw){if(this.mode==='supabase'){const {data,error}=await this.sb.auth.signUp({email,password:pw});if(error)throw new Error(explainSbError(error));if(data.session){this.user=this.userOf(data.user);}return true;}return this.signIn(email,pw);},
-  async signOut(){if(this.mode==='supabase')await this.sb.auth.signOut();sessionStorage.removeItem('pms.session');this.user=null;this.snap={};},
-  key(kind){return 'pms.data.'+this.user.id+'.'+kind;},
-  trashKey(){return 'pms.trash.'+this.user.id;},
-  setSnap(db){KINDS.forEach(k=>{this.snap[k]=new Map((db[k]||[]).map(x=>[x.id,JSON.stringify(x)]));});},
-  /* 다른 기기가 바꾼 것만 가져오기 — 바뀐 행만 골라 오므로 가볍다.
-     행 단위 저장(pms_items)이 아니면 null 을 돌려주고, 그때는 통째로 다시 불러온다 */
-  async pull(since){
-    if(this.mode!=='supabase'||!this.rowMode)return null;
-    let q=this.sb.from('pms_items').select('kind,item_id,data,deleted_at,updated_at').eq('user_id',this.user.id);
-    if(since)q=q.gt('updated_at',since);
-    const {data,error}=await q;
-    if(error){if(isMissingTable(error))return null;throw new Error(explainSbError(error));}
-    return data||[];
-  },
-  async loadAll(){
-    const db={};
-    if(this.mode==='supabase'){
-      /* ① 행 단위(pms_items) 우선 — 테이블이 없으면 예전 방식으로 자동 전환 */
-      const r=await this.sb.from('pms_items').select('kind,item_id,data,updated_at').eq('user_id',this.user.id).is('deleted_at',null);
-      if(r.error&&!isMissingTable(r.error))throw new Error(explainSbError(r.error));
-      this.rowMode=!r.error;
-      if(this.rowMode){
-        /* 다음번에 "이 뒤로 바뀐 것만" 물어보기 위해 서버가 적어 둔 가장 늦은 시각을 기억한다.
-           내 PC 시계가 아니라 서버에 저장된 값을 쓰므로, 기기마다 시계가 조금씩 달라도 어긋나지 않는다 */
-        let mx='';
-        (r.data||[]).forEach(row=>{(db[row.kind]=db[row.kind]||[]).push(row.data);
-          if(row.updated_at&&row.updated_at>mx)mx=row.updated_at;});
-        this.pullAt=mx;
-        if(!(r.data||[]).length){ /* 처음 전환: 예전 묶음 데이터를 행으로 옮긴다 */
-          const o=await this.sb.from('pms_collections').select('kind,data').eq('user_id',this.user.id);
-          if(!o.error&&(o.data||[]).length){o.data.forEach(x=>{if(Array.isArray(x.data))db[x.kind]=x.data;});
-            const rows=[];KINDS.forEach(k=>(db[k]||[]).forEach(it=>rows.push({user_id:this.user.id,kind:k,item_id:it.id,data:it,updated_at:nowStamp(),deleted_at:null})));
-            if(rows.length){const {error}=await this.sb.from('pms_items').upsert(rows);if(!error)this.rowMigrated=rows.length;}}
-        }
-        this.purgeExpired();  /* 30일 지난 휴지통 정리 — 실패해도 무시 */
-      }else{
-        const {data,error}=await this.sb.from('pms_collections').select('kind,data').eq('user_id',this.user.id);
-        if(error)throw new Error(explainSbError(error));(data||[]).forEach(x=>db[x.kind]=x.data);
-      }
-      if(!Object.keys(db).length){ /* 첫 클라우드 로그인: 같은 이메일의 로컬 데이터가 있으면 자동 이관 */
-        const pre='pms.data.local:'+this.user.email+'.';let found=false;
-        KINDS.forEach(k=>{const v=localStorage.getItem(pre+k);if(v){db[k]=JSON.parse(v);found=true;}});
-        if(found){this.snap={};for(const k of KINDS)if(db[k])await this.persist(k,db[k]);this.migrated=true;}
-      }
-    }
-    else KINDS.forEach(k=>{const v=localStorage.getItem(this.key(k));if(v)db[k]=JSON.parse(v);});
-    /* 빠진 컬렉션 채우기: 한 번도 저장되지 않은 종류만 예시로 채운다.
-       주의 — 행 단위 저장에서는 다 지우면 그 종류의 행이 하나도 없어 "처음"과 구분되지 않는다.
-       그래서 지워진 행까지 세어 보고, 있었던 적이 있으면 빈 목록으로 둔다(예시가 되살아나지 않게) */
-    const sd=seedData();let missing=KINDS.filter(k=>!Array.isArray(db[k]));
-    if(this.mode==='supabase'&&this.rowMode&&missing.length){
-      const keep=[];
-      for(const k of missing){
-        let had=false;
-        try{const r=await this.sb.from('pms_items').select('item_id',{count:'exact',head:true})
-          .eq('user_id',this.user.id).eq('kind',k);
-          had=!r.error&&(r.count||0)>0;}catch(_){}
-        if(had)db[k]=[];else keep.push(k);
-      }
-      missing=keep;
-    }
-    missing.forEach(k=>db[k]=sd[k]);
-    const out=migrateDb(db);
-    this.setSnap(out);
-    if(this.mode==='supabase'&&missing.length){this.snap={};for(const k of missing)await this.persist(k,out[k]);this.setSnap(out);}
-    return out;
-  },
-  /* 저장 — 바뀐 항목만. 지운 항목은 바로 없애지 않고 휴지통(30일)으로 */
-  /* 클라우드에 실제로 무엇이 들어 있는지 그대로 읽어 온다 — 화면과 어긋날 때 원인을 가른다 */
-  async diag(){
-    if(this.mode!=='supabase')return {mode:'local'};
-    const out={mode:this.rowMode?'row':'blob',email:this.user.email,rows:{},saved:{}};
-    try{
-      if(this.rowMode){
-        for(const k of ['mails','notes','events']){
-          const r=await this.sb.from('pms_items').select('item_id',{count:'exact',head:true})
-            .eq('user_id',this.user.id).eq('kind',k).is('deleted_at',null);
-          out.rows[k]=r.error?('오류: '+r.error.message):r.count;
-        }
-        const r2=await this.sb.from('pms_items').select('data,updated_at')
-          .eq('user_id',this.user.id).eq('kind','mails').is('deleted_at',null)
-          .order('updated_at',{ascending:false}).limit(3);
-        out.recent=(r2.data||[]).map(x=>({subject:(x.data||{}).subject||'',saved:x.updated_at}));
-      }else{
-        const r=await this.sb.from('pms_collections').select('kind,data,updated_at').eq('user_id',this.user.id);
-        if(r.error)out.err=explainSbError(r.error);
-        (r.data||[]).forEach(x=>{out.rows[x.kind]=Array.isArray(x.data)?x.data.length:'?';out.saved[x.kind]=x.updated_at;});
-        const ms=((r.data||[]).find(x=>x.kind==='mails')||{}).data||[];
-        out.recent=ms.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))).slice(0,3)
-          .map(m=>({subject:m.subject||'',saved:m.date||''}));
-      }
-    }catch(e){out.err=e.message;}
-    return out;
-  },
-  /* ── 삭제 기록 ──────────────────────────────────────
-     저장할 때 "이전에 있었는데 지금 없는 것"은 지워진 것으로 보고 서버에서도 지운다.
-     의도치 않은 삭제를 추적할 수 있도록, 무엇이 왜 지워졌는지 남긴다 */
-  why:'',
-  logDelete(kind,items){
-    try{
-      const a=JSON.parse(localStorage.getItem('pms.dellog')||'[]');
-      a.push({t:new Date().toISOString(),kind,by:this.why||'(알 수 없음)',n:items.length,
-        titles:items.slice(0,5).map(x=>(x&&(x.subject||x.title))||'(제목 없음)')});
-      localStorage.setItem('pms.dellog',JSON.stringify(a.slice(-60)));
-    }catch(_){}
-  },
-  async persist(kind,arr){
-    const prev=this.snap[kind]||new Map();
-    const next=new Map((arr||[]).map(x=>[x.id,JSON.stringify(x)]));
-    const gone=[];prev.forEach((j,id)=>{if(!next.has(id))gone.push(id);});
-    if(this.mode==='supabase'&&this.rowMode){
-      const up=[];next.forEach((j,id)=>{if(prev.get(id)!==j)up.push({user_id:this.user.id,kind,item_id:id,data:JSON.parse(j),updated_at:nowStamp(),deleted_at:null});});
-      if(up.length){const {error}=await this.sb.from('pms_items').upsert(up);if(error)throw new Error(explainSbError(error));}
-      if(gone.length){this.logDelete(kind,gone.map(id=>{try{return JSON.parse(prev.get(id));}catch(_){return null;}}));
-        const {error}=await this.sb.from('pms_items').update({deleted_at:nowStamp()}).eq('user_id',this.user.id).eq('kind',kind).in('item_id',gone);if(error)throw new Error(explainSbError(error));}
-    }
-    else if(this.mode==='supabase'){
-      /* 묶음 저장(옛 방식)은 통째로 덮어쓰므로, 그냥 올리면 다른 기기가 올려 둔 것이 날아간다.
-         서버에만 있는 항목(내가 가진 적도, 지운 적도 없는 것)은 남겨 두고 합쳐서 올린다 */
-      let merged=arr||[];
-      try{
-        const r=await this.sb.from('pms_collections').select('data').eq('user_id',this.user.id).eq('kind',kind).maybeSingle();
-        const remote=Array.isArray(r.data&&r.data.data)?r.data.data:[];
-        if(remote.length){
-          const goneSet=new Set(gone);const mine=new Map((arr||[]).map(x=>[x.id,x]));let add=0;
-          remote.forEach(x=>{if(!x||!x.id)return;
-            if(mine.has(x.id)||goneSet.has(x.id)||prev.has(x.id))return;   /* 내가 지운 것은 되살리지 않는다 */
-            mine.set(x.id,x);add++;});
-          if(add)merged=[...mine.values()];
-        }
-      }catch(_){}
-      const {error}=await this.sb.from('pms_collections').upsert({user_id:this.user.id,kind,data:merged,updated_at:nowStamp()});if(error)throw new Error(explainSbError(error));
-      if(gone.length)this.localTrash(kind,gone.map(id=>JSON.parse(prev.get(id))));
-    }
-    else{
-      localStorage.setItem(this.key(kind),JSON.stringify(arr));
-      if(gone.length)this.localTrash(kind,gone.map(id=>JSON.parse(prev.get(id))));
-    }
-    this.snap[kind]=next;
-  },
-  /* ── 휴지통 ── */
-  localTrash(kind,items){this.logDelete(kind,items);try{const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');
-    items.forEach(it=>t.push({kind,item:it,at:nowStamp()}));
-    const cut=Date.now()-TRASH_DAYS*864e5;
-    localStorage.setItem(this.trashKey(),JSON.stringify(t.filter(x=>new Date(x.at).getTime()>cut).slice(-500)));}catch(_){}},
-  async purgeExpired(){try{const cut=new Date(Date.now()-TRASH_DAYS*864e5).toISOString();
-    await this.sb.from('pms_items').delete().eq('user_id',this.user.id).lt('deleted_at',cut);}catch(_){}},
-  async listTrash(){
-    if(this.mode==='supabase'&&this.rowMode){
-      const {data,error}=await this.sb.from('pms_items').select('kind,item_id,data,deleted_at').eq('user_id',this.user.id).not('deleted_at','is',null).order('deleted_at',{ascending:false}).limit(300);
-      if(error)throw new Error(explainSbError(error));
-      return (data||[]).map(r=>({kind:r.kind,id:r.item_id,item:r.data,at:r.deleted_at}));}
-    try{return JSON.parse(localStorage.getItem(this.trashKey())||'[]').map(x=>({kind:x.kind,id:x.item.id,item:x.item,at:x.at})).reverse();}catch(_){return [];}
-  },
-  /* 되살리기: 휴지통에서 꺼내 항목을 돌려준다(화면에 다시 넣는 것은 호출한 쪽) */
-  async restore(kind,id){
-    if(this.mode==='supabase'&&this.rowMode){
-      const {data,error}=await this.sb.from('pms_items').update({deleted_at:null,updated_at:nowStamp()}).eq('user_id',this.user.id).eq('kind',kind).eq('item_id',id).select('data');
-      if(error)throw new Error(explainSbError(error));return data&&data[0]&&data[0].data;}
-    const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');const i=t.findIndex(x=>x.kind===kind&&x.item.id===id);
-    if(i<0)return null;const it=t[i].item;t.splice(i,1);localStorage.setItem(this.trashKey(),JSON.stringify(t));return it;
-  },
-  async purge(kind,id){
-    if(this.mode==='supabase'&&this.rowMode){const {error}=await this.sb.from('pms_items').delete().eq('user_id',this.user.id).eq('kind',kind).eq('item_id',id);if(error)throw new Error(explainSbError(error));return;}
-    const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');localStorage.setItem(this.trashKey(),JSON.stringify(t.filter(x=>!(x.kind===kind&&x.item.id===id))));
-  },
-  async emptyTrash(){
-    if(this.mode==='supabase'&&this.rowMode){const {error}=await this.sb.from('pms_items').delete().eq('user_id',this.user.id).not('deleted_at','is',null);if(error)throw new Error(explainSbError(error));return;}
-    localStorage.removeItem(this.trashKey());
-  },
-  /* 설정 화면: 행 단위 저장으로 전환됐는지 확인 */
-  async checkRowMode(){
-    if(this.mode!=='supabase')return {ok:false,msg:'로컬 저장 모드입니다 — 클라우드 연결 후 사용합니다'};
-    const {error}=await this.sb.from('pms_items').select('kind',{head:true,count:'exact'}).limit(1);
-    if(error)return {ok:false,msg:isMissingTable(error)?'테이블 pms_items 가 아직 없습니다 — 아래 SQL을 실행하세요':explainSbError(error)};
-    this.rowMode=true;return {ok:true,msg:'행 단위 저장이 켜져 있습니다 — 바뀐 항목만 저장됩니다'};
-  },
-  exportJSON(db){const blob=new Blob([JSON.stringify(db,null,1)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pms-backup-'+todayISO()+'.json';a.click();}
+  async signOut(){if(this.mode==='supabase')await this.sb.auth.signOut();sessionStorage.removeItem('pms.session');this.user=null;},
 };
 
 /* Claude 호출 — 우선순위: ① Supabase Edge Function(키가 서버에만 있음, 권장) ② 브라우저 직접(설정에 API 키) ③ 프리뷰 호스트(window.claude) */
@@ -36605,23 +36335,9 @@ Store.dashAsr=async function(blob,opt={}){
   if(data&&data.error)throw new Error(data.error);
   return (data&&data.text)||'';
 };
-async function testStt(){ /* 1초짜리 무음을 보내 연결만 확인 */
-  const rate=16000,n=rate;const s=new Float32Array(n);
-  for(let i=0;i<n;i++)s[i]=Math.sin(i*0.02)*0.02;
-  const t0=Date.now();const r=await Store.transcribe(wavBlob(s,rate),{name:'test',language:'ko'});
-  return {ok:true,mode:sttMode(),ms:Date.now()-t0,text:(r||'').trim().slice(0,40)};
-}
-/* 설정 화면의 "Claude 테스트" */
-async function testClaude(){const t0=Date.now();const r=await askClaude('연결 테스트입니다. "연결 성공"이라고만 답하세요.',{max_tokens:20});return {ok:true,mode:claudeMode(),ms:Date.now()-t0,text:r};}
-Object.assign(window,{Store,dashBase,explainSbError,CLAUDE_MODELS,STT_MODELS,STT_NEW,diarizeText,sttMode,testStt,explainSttError,claudeMode,testClaude,seedData,uid,pad2,isoDate,todayISO,shiftDay,nowStamp,askClaude,SUPABASE_SQL,ITEMS_SQL,KINDS,titleOf,TRASH_DAYS});
+Object.assign(window,{Store,dashBase,explainSbError,CLAUDE_MODELS,STT_MODELS,STT_NEW,diarizeText,sttMode,explainSttError,claudeMode,uid,pad2,isoDate,todayISO,nowStamp,askClaude});
 </script>
-<script type="text/babel">/* 공용: 마크다운 렌더러(React 요소), 위키링크 추출, ICS 변환, 반복 일정 전개, 폼 입력 */
-const WIKI_RE=/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
-/* 코드 블록·인라인 코드 안의 [[예시]]는 실제 링크가 아니다 (설명문에서 문법을 보여줄 때) */
-const stripCode=md=>(md||'').replace(/```[\s\S]*?```/g,' ').replace(/`[^`\n]*`/g,' ');
-function wikiLinks(md){const s=new Set();let m;const t=stripCode(md);WIKI_RE.lastIndex=0;while((m=WIKI_RE.exec(t)))s.add(m[1].trim());return [...s];}
-
-
+<script type="text/babel">/* 공용: 화면 크기, 마크다운 렌더러, 폼 입력, 백그라운드 유지 */
 /* ── 화면 크기 ─────────────────────────────────────────────
    폰에서는 나란히 놓던 칸들을 한 번에 하나씩 보여준다 */
 function useMobile(){
@@ -36679,107 +36395,8 @@ function Markdown({md='',onWiki,onToggleTask,style}){
   return <div style={{fontSize:'var(--fs-md2)',color:'var(--text-body)',fontFamily:'var(--font-sans)',...style}}>{blocks}</div>;
 }
 
-/* ICS */
-const icsDT=(date,time)=>time?date.replace(/-/g,'')+'T'+time.replace(':','')+'00':date.replace(/-/g,'');
-function toICS(events){const L=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//PMS//KO'];events.forEach(e=>{L.push('BEGIN:VEVENT','UID:'+e.id+'@pms','SUMMARY:'+e.title,(e.start?'DTSTART:':'DTSTART;VALUE=DATE:')+icsDT(e.date,e.start));const last=(e.dateEnd&&e.dateEnd>e.date)?e.dateEnd:e.date;
-  if(e.end||!e.start)L.push((e.start?'DTEND:':'DTEND;VALUE=DATE:')+(e.start?icsDT(last,e.end||e.start):icsDT(shiftDay(last,1))));if(e.repeat&&e.repeat!=='none')L.push('RRULE:FREQ='+e.repeat.toUpperCase());if(e.notes)L.push('DESCRIPTION:'+e.notes.replace(/\n/g,'\\n'));L.push('CATEGORIES:'+e.cal,'END:VEVENT');});L.push('END:VCALENDAR');return L.join('\r\n');}
-function fromICS(text){const out=[];text.replace(/\r?\n[ \t]/g,'').split(/BEGIN:VEVENT/).slice(1).forEach(chunk=>{const g=k=>{const m=new RegExp('^'+k+'[^:]*:(.*)$','m').exec(chunk);return m?m[1].trim():'';};const ds=g('DTSTART'),de=g('DTEND');const fmt=s=>s?s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8):'';const tm=s=>s.length>8?s.slice(9,11)+':'+s.slice(11,13):'';const rr=/FREQ=(\w+)/.exec(g('RRULE'));
-  out.push({id:uid(),title:g('SUMMARY')||'(제목 없음)',date:fmt(ds),start:tm(ds),end:tm(de),cal:/personal/i.test(g('CATEGORIES'))?'personal':'work',status:'todo',priority:'mid',repeat:rr?rr[1].toLowerCase():'none',notes:g('DESCRIPTION').replace(/\\n/g,'\n')});});return out.filter(e=>e.date);}
-
-/* 반복 전개: 기간 내 occurrence 생성 (원본 id 유지, occ 플래그) */
-function expandEvents(events,fromISO,toISO){const out=[];events.forEach(e=>{if(!e.repeat||e.repeat==='none'){if(e.date>=fromISO&&e.date<=toISO)out.push(e);return;}
-  let d=e.date,n=0;const base=new Date(e.date+'T00:00:00');while(d<=toISO&&n<400){if(d>=fromISO)out.push({...e,date:d,occ:d!==e.date});n++;if(e.repeat==='daily')d=shiftDay(d,1);else if(e.repeat==='weekly')d=shiftDay(d,7);else{const x=new Date(base);x.setMonth(base.getMonth()+n);d=isoDate(x);}}});return out.sort((a,b)=>(a.date+(a.start||'')).localeCompare(b.date+(b.start||'')));}
-
 /* 폼 컨트롤 (원본 select/input 룩) */
 const inputStyle={border:'1px solid var(--border-strong)',borderRadius:'var(--radius-md)',padding:'5px 8px',fontSize:'var(--fs-base)',fontFamily:'var(--font-sans)',color:'var(--text-body)',background:'#fff',outline:'none',width:'100%'};
-function Field({label,children,row}){return <label style={{display:row?'flex':'block',alignItems:'center',gap:10,marginBottom:10}}><span style={{display:'block',fontSize:'var(--fs-sm)',color:'var(--text-label)',fontWeight:500,marginBottom:row?0:4,minWidth:row?70:0}}>{label}</span><span style={{flex:1,display:'block'}}>{children}</span></label>;}
-function TextInput(props){const [f,setF]=React.useState(false);return <input {...props} onFocus={e=>{setF(true);props.onFocus&&props.onFocus(e)}} onBlur={e=>{setF(false);props.onBlur&&props.onBlur(e)}} style={{...inputStyle,outline:f?'1px solid var(--color-focus)':'none',...props.style}}/>;}
-function Select({options,value,onChange,style}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{...inputStyle,width:'auto',fontSize:'var(--fs-md2)',padding:'4px 8px',...style}}>{options.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>;}
-function Chip({on,children,onClick,color}){return <button type="button" onClick={onClick} style={{border:'1px solid '+(on?(color||'var(--color-accent)'):'var(--border-default)'),background:on?(color?color+'22':'var(--surface-calc-cell)'):'transparent',color:on?'var(--text-body)':'var(--text-muted)',borderRadius:14,padding:'2px 9px',fontSize:'var(--fs-sm)',fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>{children}</button>;}
-/* 대한민국 공휴일 2025~2032 (음력 환산 + 대체공휴일 규칙 반영) */
-const HOLIDAYS={"2025-01-01":"신정","2025-01-28":"설날 연휴","2025-01-29":"설날","2025-01-30":"설날 연휴","2025-03-01":"삼일절","2025-03-03":"대체공휴일(삼일절)","2025-05-05":"어린이날","2025-05-06":"대체공휴일(어린이날)","2025-06-06":"현충일","2025-08-15":"광복절","2025-10-03":"개천절","2025-10-05":"추석 연휴","2025-10-06":"추석","2025-10-07":"추석 연휴","2025-10-08":"대체공휴일(추석)","2025-10-09":"한글날","2025-12-25":"성탄절","2026-01-01":"신정","2026-02-16":"설날 연휴","2026-02-17":"설날","2026-02-18":"설날 연휴","2026-03-01":"삼일절","2026-03-02":"대체공휴일(삼일절)","2026-05-05":"어린이날","2026-05-24":"부처님오신날","2026-05-25":"대체공휴일(부처님오신날)","2026-06-06":"현충일","2026-08-15":"광복절","2026-08-17":"대체공휴일(광복절)","2026-09-24":"추석 연휴","2026-09-25":"추석","2026-09-26":"추석 연휴","2026-10-03":"개천절","2026-10-05":"대체공휴일(개천절)","2026-10-09":"한글날","2026-12-25":"성탄절","2027-01-01":"신정","2027-02-06":"설날 연휴","2027-02-07":"설날","2027-02-08":"설날 연휴","2027-02-09":"대체공휴일(설날)","2027-03-01":"삼일절","2027-05-05":"어린이날","2027-05-13":"부처님오신날","2027-06-06":"현충일","2027-08-15":"광복절","2027-08-16":"대체공휴일(광복절)","2027-09-14":"추석 연휴","2027-09-15":"추석","2027-09-16":"추석 연휴","2027-10-03":"개천절","2027-10-04":"대체공휴일(개천절)","2027-10-09":"한글날","2027-10-11":"대체공휴일(한글날)","2027-12-25":"성탄절","2027-12-27":"대체공휴일(성탄절)","2028-01-01":"신정","2028-01-26":"설날 연휴","2028-01-27":"설날","2028-01-28":"설날 연휴","2028-03-01":"삼일절","2028-05-02":"부처님오신날","2028-05-05":"어린이날","2028-06-06":"현충일","2028-08-15":"광복절","2028-10-02":"추석 연휴","2028-10-03":"추석","2028-10-04":"추석 연휴","2028-10-05":"대체공휴일(추석)","2028-10-09":"한글날","2028-12-25":"성탄절","2029-01-01":"신정","2029-02-12":"설날 연휴","2029-02-13":"설날","2029-02-14":"설날 연휴","2029-03-01":"삼일절","2029-05-05":"어린이날","2029-05-07":"대체공휴일(어린이날)","2029-05-20":"부처님오신날","2029-05-21":"대체공휴일(부처님오신날)","2029-06-06":"현충일","2029-08-15":"광복절","2029-09-21":"추석 연휴","2029-09-22":"추석","2029-09-23":"추석 연휴","2029-09-24":"대체공휴일(추석)","2029-10-03":"개천절","2029-10-09":"한글날","2029-12-25":"성탄절","2030-01-01":"신정","2030-02-02":"설날 연휴","2030-02-03":"설날","2030-02-04":"설날 연휴","2030-02-05":"대체공휴일(설날)","2030-03-01":"삼일절","2030-05-05":"어린이날","2030-05-06":"대체공휴일(어린이날)","2030-05-09":"부처님오신날","2030-06-06":"현충일","2030-08-15":"광복절","2030-09-11":"추석 연휴","2030-09-12":"추석","2030-09-13":"추석 연휴","2030-10-03":"개천절","2030-10-09":"한글날","2030-12-25":"성탄절","2031-01-01":"신정","2031-01-22":"설날 연휴","2031-01-23":"설날","2031-01-24":"설날 연휴","2031-03-01":"삼일절","2031-03-03":"대체공휴일(삼일절)","2031-05-05":"어린이날","2031-05-28":"부처님오신날","2031-06-06":"현충일","2031-08-15":"광복절","2031-09-30":"추석 연휴","2031-10-01":"추석","2031-10-02":"추석 연휴","2031-10-03":"개천절","2031-10-09":"한글날","2031-12-25":"성탄절","2032-01-01":"신정","2032-02-10":"설날 연휴","2032-02-11":"설날","2032-02-12":"설날 연휴","2032-03-01":"삼일절","2032-05-05":"어린이날","2032-05-16":"부처님오신날","2032-05-17":"대체공휴일(부처님오신날)","2032-06-06":"현충일","2032-08-15":"광복절","2032-08-16":"대체공휴일(광복절)","2032-09-18":"추석 연휴","2032-09-19":"추석","2032-09-20":"추석 연휴","2032-09-21":"대체공휴일(추석)","2032-10-03":"개천절","2032-10-04":"대체공휴일(개천절)","2032-10-09":"한글날","2032-10-11":"대체공휴일(한글날)","2032-12-25":"성탄절","2032-12-27":"대체공휴일(성탄절)"};
-const holidayOf=iso=>HOLIDAYS[iso]||'';
-const isRestDay=iso=>{const d=new Date(iso+'T00:00:00');return d.getDay()===0||d.getDay()===6||!!HOLIDAYS[iso];};
-const CAL_COLOR={work:'#4E82AE',personal:'#0a6b3b'};
-const CAL_LABEL={work:'회사',personal:'개인'};
-const STATUS_LABEL={todo:'예정',doing:'진행중',done:'완료'};
-const STATUS_KEYS=['todo','doing','done'];
-const PRI_LABEL={high:'높음',mid:'보통',low:'낮음'};
-const fmtDT=iso=>{const d=new Date(iso);return isNaN(d)?iso:d.getMonth()+1+'/'+d.getDate()+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());};
-function usePaneSize(key,def){
-  const [v,setV]=React.useState(()=>{const s=parseFloat(localStorage.getItem('pms.pane.'+key));return isFinite(s)?s:def;});
-  React.useEffect(()=>{try{localStorage.setItem('pms.pane.'+key,String(v));}catch(_){}},[key,v]);
-  return [v,setV,()=>setV(def)];
-}
-/* 좌우 폭 조절 손잡이. 드래그하면 onDrag(이동한 px), 더블클릭하면 onReset
-   컴포넌트는 반드시 파일 최상위에 — 안쪽에 정의하면 렌더마다 재마운트되어 드래그가 끊긴다 */
-function Splitter({onDrag,onReset}){
-  const [hot,setHot]=React.useState(false);
-  const down=e=>{e.preventDefault();let last=e.clientX;
-    const mv=ev=>{const dx=ev.clientX-last;last=ev.clientX;if(dx)onDrag(dx);};
-    const up=()=>{window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);
-      document.body.style.cursor='';document.body.style.userSelect='';setHot(false);};
-    window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
-    document.body.style.cursor='col-resize';document.body.style.userSelect='none';setHot(true);};
-  return <div onMouseDown={down} onDoubleClick={onReset} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)}
-    title="드래그해서 폭 조절 · 더블클릭하면 기본 폭"
-    style={{width:5,cursor:'col-resize',position:'relative',flex:'0 0 5px',background:'transparent',alignSelf:'stretch',minHeight:24}}>
-    <div style={{position:'absolute',top:0,bottom:0,left:hot?1:2,width:hot?3:1,background:hot?'var(--color-accent)':'var(--border-default)'}}/>
-  </div>;
-}
-
-/* 단추 옆에 붙는 작은 메뉴 — 자주 쓰지 않는 동작을 접어 둔다 */
-function MenuButton({label,icon,items,align,title}){
-  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
-  const [open,setOpen]=React.useState(false);const ref=React.useRef();
-  React.useEffect(()=>{if(!open)return;
-    const off=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    const esc=e=>{if(e.key==='Escape')setOpen(false);};
-    document.addEventListener('mousedown',off);document.addEventListener('keydown',esc);
-    return()=>{document.removeEventListener('mousedown',off);document.removeEventListener('keydown',esc);};},[open]);
-  return <span ref={ref} style={{position:'relative',display:'inline-flex'}}>
-    <Button variant="gray" size="sm" icon={icon} title={title} onClick={()=>setOpen(o=>!o)}>{label} ▾</Button>
-    {open&&<div style={{position:'absolute',top:'100%',marginTop:4,[align==='right'?'right':'left']:0,zIndex:120,
-      minWidth:220,background:'#fff',border:'1px solid var(--border-strong)',borderRadius:6,
-      boxShadow:'0 6px 20px rgba(0,0,0,.16)',padding:4}}>
-      {(items||[]).filter(Boolean).map((it,i)=>it.sep
-        ?<div key={i} style={{height:1,background:'var(--border-default)',margin:'4px 2px'}}/>
-        :<button key={i} type="button" disabled={it.disabled} onClick={()=>{setOpen(false);it.onClick&&it.onClick();}}
-          style={{display:'block',width:'100%',textAlign:'left',border:'none',background:'transparent',
-            padding:'7px 10px',borderRadius:4,fontSize:'var(--fs-base)',fontFamily:'inherit',
-            color:it.disabled?'var(--text-label)':'var(--text-body)',cursor:it.disabled?'default':'pointer'}}
-          onMouseEnter={e=>{if(!it.disabled)e.currentTarget.style.background='var(--surface-hover)';}}
-          onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>
-          {it.label}
-          {it.sub&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:1}}>{it.sub}</div>}
-        </button>)}
-    </div>}
-  </span>;
-}
-/* ── 알림 ────────────────────────────────────────────
-   브라우저가 띄우는 알림(Notification). 이 앱 탭이 살아 있는 동안만 동작한다.
-   https 로 열었을 때만 쓸 수 있고(홈 화면 앱 포함), 파일로 직접 연 경우엔 지원되지 않는다 */
-const Notify={
-  supported(){return typeof Notification!=='undefined';},
-  state(){return this.supported()?Notification.permission:'unsupported';},
-  ok(){return this.supported()&&Notification.permission==='granted';},
-  async ask(){
-    if(!this.supported())throw new Error('이 브라우저는 알림을 지원하지 않습니다');
-    if(Notification.permission==='denied')throw new Error('브라우저에서 알림이 차단되어 있습니다 — 주소창 왼쪽 자물쇠에서 허용으로 바꿔 주세요');
-    const r=await Notification.requestPermission();
-    if(r!=='granted')throw new Error('알림이 허용되지 않았습니다');
-    return true;
-  },
-  /* tag 를 주면 같은 tag 의 알림은 새 것으로 갈아끼운다(같은 알림이 쌓이지 않게) */
-  show(title,body,tag){
-    if(!this.ok())return null;
-    try{
-      const n=new Notification(title,{body:body||'',tag:tag||'pms',icon:'icon-192.png',badge:'icon-192.png'});
-      n.onclick=()=>{try{window.focus();}catch(_){}n.close();};
-      return n;
-    }catch(_){return null;}
-  },
-};
 /* ── 백그라운드 유지 ──────────────────────────────────
    크롬은 한동안 보이지 않은 탭을 "얼려" 타이머를 아예 멈춘다. 그러면 자동 동기화도 함께 멈춘다.
    소리를 내고 있는 탭은 얼리지 않으므로, 사람이 들을 수 없을 만큼 작은 소리를 아주 조용히 틀어 둔다.
@@ -36798,44 +36415,13 @@ const KeepAwake={
   off(){if(this.el){try{this.el.pause();this.el.remove();}catch(_){}}this.el=null;},
   get running(){return !!(this.el&&!this.el.paused);},
 };
-Object.assign(window,{KeepAwake,Notify,MenuButton,usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
+Object.assign(window,{KeepAwake,useMobile,BackBar,Markdown,renderInline,inputStyle});
 </script>
 <script type="text/babel">/* ── 첨부 파일(이미지·PDF) ─────────────────────────────────────────
    클라우드 모드 → Supabase Storage 버킷 'pms-files' (비공개, 본인 폴더만 접근)
    로컬 모드     → 이 브라우저의 IndexedDB
    노트에는 `![](pms:경로)` 처럼 적어 두고, 볼 때 1시간짜리 서명 주소로 바꿔 띄운다 */
 const BUCKET='pms-files';
-const FILES_SQL=`-- 첨부 파일 저장소 — 몇 번을 다시 실행해도 안전합니다
--- ① 파일을 담아 둘 비공개 버킷
-insert into storage.buckets (id, name, public)
-values ('pms-files','pms-files', false)
-on conflict (id) do nothing;
-
--- ② 전사(중국어 Alibaba 엔진)용 임시 공개 버킷 — 전사하는 동안만 사본을 두고 끝나면 지웁니다
-insert into storage.buckets (id, name, public)
-values ('pms-temp','pms-temp', true)
-on conflict (id) do nothing;
-
--- ③ 권한: 내 폴더(경로 첫 칸 = 내 user id)만 읽고 쓰기
-drop policy if exists "pms own files select" on storage.objects;
-drop policy if exists "pms own files insert" on storage.objects;
-drop policy if exists "pms own files update" on storage.objects;
-drop policy if exists "pms own files delete" on storage.objects;
-drop policy if exists "pms temp own insert" on storage.objects;
-drop policy if exists "pms temp own delete" on storage.objects;
-
-create policy "pms own files select" on storage.objects for select
-  using (bucket_id='pms-files' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "pms own files insert" on storage.objects for insert
-  with check (bucket_id='pms-files' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "pms own files update" on storage.objects for update
-  using (bucket_id='pms-files' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "pms own files delete" on storage.objects for delete
-  using (bucket_id='pms-files' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "pms temp own insert" on storage.objects for insert
-  with check (bucket_id='pms-temp' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "pms temp own delete" on storage.objects for delete
-  using (bucket_id='pms-temp' and (storage.foldername(name))[1] = auth.uid()::text);`;
 /* 저장소 오류를 사람 말로. 원문도 뒤에 붙여 둔다(진단에 필요) */
 function explainStorageError(e){
   const m=(e&&(e.message||e.error||String(e)))||'';const st=(e&&(e.statusCode||e.status))||'';
@@ -36988,79 +36574,8 @@ function PmsLink({src,children}){
   const open=async e=>{e.preventDefault();try{window.open(await Files.url(src.slice(4)),'_blank','noreferrer');}catch(err){alert(err.message);}};
   return <a href="#" onClick={open} style={{color:'var(--color-accent)'}}>{children}</a>;
 }
-/* 파일 여러 개를 올려 노트에 넣을 마크다운 조각으로 */
-async function filesToMd(list,onStep){
-  const md=[];const meta=[];
-  for(let i=0;i<list.length;i++){const f=list[i];onStep&&onStep(i+1,list.length,f.name);
-    const r=await Files.put(f);meta.push(r);
-    md.push(/^image\//.test(r.type)?'!['+r.name+'](pms:'+r.path+')'
-      :((window.AUDIO_EXT&&AUDIO_EXT.test(r.name))||/^audio\//.test(r.type||'')?'[🎙 ':'[📎 ')+r.name+'](pms:'+r.path+')');}
-  return {md:md.join('\n\n'),meta};
-}
 
-/* ── 회사 메일 폴더 지켜보기 ────────────────────────────────────
-   PC에서 도는 스크립트가 새 메일을 .eml 로 떨어뜨리면, 앱이 그 폴더를 읽어 가져온다.
-   브라우저는 폴더를 "권한을 준 만큼만" 볼 수 있다(File System Access API, 크롬 계열).
-   손잡이(handle)는 IndexedDB에 넣어 두므로 다음에 열 때도 같은 폴더를 기억한다 */
-const MAILDIR_KEY='pms.maildir';
-const MAILDONE_KEY='pms.mailfiles';
-const MailFolder={
-  ok(){return typeof window.showDirectoryPicker==='function';},
-  async pick(){
-    if(!this.ok())throw new Error('이 브라우저는 폴더 읽기를 지원하지 않습니다 — 크롬·엣지에서 열어주세요');
-    const h=await window.showDirectoryPicker({id:'pms-mail',mode:'read',startIn:'documents'});
-    await idbPut(MAILDIR_KEY,h);return h.name;
-  },
-  async handle(){try{return await idbGet(MAILDIR_KEY);}catch(_){return null;}},
-  async name(){const h=await this.handle();return h?h.name:'';},
-  async forget(){await idbPut(MAILDIR_KEY,null);localStorage.removeItem(MAILDONE_KEY);},
-  /* 폴더 연결은 그대로 두고 "이미 읽음" 기록만 지운다 — 폴더에 남은 .eml 을 처음부터 다시 읽는다 */
-  reread(){const n=this.done().size;localStorage.removeItem(MAILDONE_KEY);return n;},
-  /* ask=true 일 때만 권한 창을 띄운다(자동 실행 중에는 조용히 실패해야 한다) */
-  async ready(ask){
-    const h=await this.handle();if(!h)return null;
-    let st='granted';
-    try{st=await h.queryPermission({mode:'read'});}catch(_){}
-    if(st!=='granted'&&ask){try{st=await h.requestPermission({mode:'read'});}catch(_){st='denied';}}
-    return st==='granted'?h:null;
-  },
-  done(){try{return new Set(JSON.parse(localStorage.getItem(MAILDONE_KEY)||'[]'));}catch(_){return new Set();}},
-  markDone(names){const s=this.done();names.forEach(n=>s.add(n));
-    /* 너무 커지지 않게 최근 3000개만 */
-    localStorage.setItem(MAILDONE_KEY,JSON.stringify([...s].slice(-3000)));},
-  /* 아직 안 읽은 .eml 을 최대 max 개 읽어 온다 */
-  async scan(ask,max){
-    const h=await this.ready(ask);if(!h)return null;
-    const seen=this.done();const out=[];
-    for await(const e of h.values()){
-      if(e.kind!=='file'||!/\.eml$/i.test(e.name))continue;
-      if(seen.has(e.name))continue;
-      try{const f=await e.getFile();out.push({name:e.name,text:await f.text()});}catch(_){}
-      if(out.length>=(max||40))break;
-    }
-    out.sort((a,b)=>a.name.localeCompare(b.name));
-    return out;
-  },
-  /* 연결 상태 — none: 폴더를 아직 안 골랐음 · need: 권한이 풀렸음(브라우저를 껐다 켜면 생김) · ok */
-  async state(){
-    if(!this.ok())return 'unsupported';
-    const h=await this.handle();if(!h)return 'none';
-    let st='granted';try{st=await h.queryPermission({mode:'read'});}catch(_){}
-    return st==='granted'?'ok':'need';
-  },
-  /* 폴더 상태 — 전체 .eml 개수와 아직 안 읽은 개수 */
-  async stats(ask){
-    const h=await this.ready(ask);if(!h)return null;
-    const seen=this.done();let all=0,neu=0;
-    for await(const e of h.values()){
-      if(e.kind!=='file'||!/\.eml$/i.test(e.name))continue;
-      all++;if(!seen.has(e.name))neu++;
-    }
-    return {all,neu};
-  },
-};
-
-Object.assign(window,{Files,MailFolder,FILES_SQL,BUCKET,PmsImg,PmsLink,pmsRefs,filesToMd,shrinkImage,b64of});
+Object.assign(window,{Files,BUCKET,PmsImg,PmsLink,pmsRefs,shrinkImage,b64of});
 </script>
 <script type="text/babel">/* ── 음성: 녹음 · 전사 ─────────────────────────────────────────────
    녹음  — 브라우저 MediaRecorder. 긴 회의는 15분마다 조각을 끊어 저장한다(한 파일이 커지면 다루기 어렵다)
@@ -37071,8 +36586,7 @@ const AUDIO_EXT=/\.(webm|m4a|mp3|wav|ogg|oga|opus|mp4|mpga|mpeg|flac|aac|aif|aif
 const WHISPER_OK=/\.(mp3|mp4|m4a|wav|webm|ogg|oga|mpga|mpeg|flac)$/i;
 const needConvert=(blob,name)=>!(WHISPER_OK.test(name||'')||/(mpeg|mp4|wav|webm|ogg|flac|m4a)/i.test(blob&&blob.type||''));
 const SEG_SEC=150;                 /* 잘라 보낼 조각 길이(초) — 조각 하나가 base64로 약 6MB */
-const ONESHOT_MAX=45*1024*100;     /* 이보다 작으면(약 4.5MB) 자르지 않고 그대로 보낸다 */
-const REC_SPLIT_MS=15*60*1000;     /* 녹음 자동 분할 */
+const ONESHOT_MAX=45*1024*100;     /* 녹음 자동 분할 */
 const mmss=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 
 /* PCM → WAV(16bit 모노) */
@@ -37147,10 +36661,6 @@ async function transcribeBlob(blob,opt={}){
   }
   return texts.filter(Boolean).join('\n\n');
 }
-/* 엔진 골라 부르기 */
-async function transcribeAttachment(path,opt={}){
-  return transcribeBlob(await Files.blob(path),{...opt,srcName:path});
-}
 /* 노트 본문에서 음성 첨부 찾기 */
 const audioRefs=md=>pmsRefs(md).filter(r=>AUDIO_EXT.test(r.path)||/🎙/.test(r.raw));
 
@@ -37164,39 +36674,7 @@ function PmsAudio({src,label}){
     {u?<audio src={u} controls preload="none" style={{height:32,verticalAlign:'middle'}}/>:<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>불러오는 중…</span>}
   </span>;
 }
-/* 녹음 단추 — 노트 편집 도구줄에 붙는다 */
-function RecButton({onDone,onErr}){
-  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
-  const [on,setOn]=React.useState(false);const [sec,setSec]=React.useState(0);
-  const R=React.useRef({rec:null,chunks:[],stream:null,timer:null,part:0});
-  const stopAll=()=>{const r=R.current;clearInterval(r.timer);
-    if(r.stream)r.stream.getTracks().forEach(t=>t.stop());
-    r.rec=null;r.stream=null;setOn(false);setSec(0);};
-  const flush=(final)=>{const r=R.current;const blob=new Blob(r.chunks,{type:r.chunks[0]?r.chunks[0].type:'audio/webm'});
-    r.chunks=[];if(blob.size>2000)onDone(blob,++r.part,final);};
-  const start=async()=>{
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
-      const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m))||'';
-      const rec=new MediaRecorder(stream,mime?{mimeType:mime,audioBitsPerSecond:48000}:undefined);
-      R.current={rec,chunks:[],stream,timer:null,part:0};
-      rec.ondataavailable=e=>{if(e.data&&e.data.size)R.current.chunks.push(e.data);};
-      rec.onstop=()=>{const wasSplit=R.current.split;R.current.split=false;flush(!wasSplit);
-        if(wasSplit&&R.current.stream){try{R.current.rec.start();}catch(_){}}else stopAll();};
-      rec.start();setOn(true);setSec(0);
-      R.current.timer=setInterval(()=>setSec(s=>{
-        const n=s+1;
-        if(n*1000>=REC_SPLIT_MS){R.current.split=true;try{R.current.rec.stop();}catch(_){}return 0;} /* 15분마다 조각내기 */
-        return n;}),1000);
-    }catch(e){onErr&&onErr(/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message);}
-  };
-  const stop=()=>{const r=R.current;if(!r.rec)return;r.split=false;try{r.rec.stop();}catch(_){stopAll();}};
-  React.useEffect(()=>()=>{const r=R.current;clearInterval(r.timer);if(r.stream)r.stream.getTracks().forEach(t=>t.stop());},[]);
-  return on
-    ? <Button variant="danger" size="xs" onClick={stop} title="녹음 정지">■ {mmss(sec)}</Button>
-    : <Button variant="ghost" size="xs" onClick={start} title="이 노트에 음성 녹음 (15분마다 자동으로 조각냅니다)">● 녹음</Button>;
-}
-Object.assign(window,{transcribeAttachment,AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,RecButton,mmss,blobB64,SEG_SEC});
+Object.assign(window,{AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,mmss,blobB64,SEG_SEC});
 </script>
 <script type="text/babel">/* ── 통역 (실시간) ────────────────────────────────────────────
    마이크 → 16kHz PCM 조각(0.1초) → WebSocket → Edge Function 'livetranslate'(키 보관) → Alibaba
@@ -37460,7 +36938,7 @@ class LiveSession{
       +'## 실시간 통역\n'+(pairs||'(자막 없음)')+'\n\n## 실시간 원문\n'+(raw||'(없음)')+'\n';
   }
 }
-/* 화면을 옮겨도(메일 확인 등) 통역이 끊기지 않도록 세션은 화면 밖에 둔다 */
+/* 화면을 옮겨도(번역/정리 확인 등) 통역이 끊기지 않도록 세션은 화면 밖에 둔다 */
 const LIVE={sess:null,saved:null};
 
 function LiveView({db,setDb,toast,onOpenNote}){
@@ -37604,14 +37082,6 @@ const CONV_TTS={ko:'ko-KR',zh:'zh-CN',en:'en-US',ja:'ja-JP'};
 const CONV_LAYOUTS=[{id:'call',label:'📞 한 화면',desc:'스피커폰 통화 · 혼자 보기'},{id:'face',label:'🤝 마주 보기',desc:'위쪽은 상대를 향해 뒤집혀 보입니다'}];
 const CONV_JOIN_MS=1500;const CONV_JOIN_AFTER_MS=600;const CONV_JOIN_MAX=4;const CONV_DUP_MS=6000;
 const convClosed=t=>/[。．.!?！？」』]\s*$/.test(String(t||'').trim());
-/* 받아쓴 글의 글자로 언어 가리기 (기록 표시용) */
-function convLang(t){t=String(t||'');const n=re=>(t.match(re)||[]).length;
-  const ko=n(/[가-힣]/g),kana=n(/[぀-ヿ]/g),han=n(/[一-鿿]/g),lat=n(/[a-z]/gi);
-  if(!ko&&!kana&&!han&&!lat)return '';
-  if(ko&&ko*3>=han+kana)return 'ko';
-  if(kana)return 'ja';
-  if(han)return 'zh';
-  return lat>ko*3?'en':'ko';}
 let CONV_SILENT='';
 const convSilent=()=>CONV_SILENT||(CONV_SILENT=pcm16b64(new Float32Array(LIVE_CHUNK)));
 /* 기기 음성 고르기 — zh 는 zh-CN 을 먼저 */
@@ -37970,83 +37440,10 @@ function ConvView({setDb,toast,onOpenNote}){
     </div>
   </Card>;
 }
-Object.assign(window,{ConvView,ConvSession,ConvOut,ConvInConn,ConvOutConn,convLang,convVoice,CONV,CONV_THEIRS});
+Object.assign(window,{ConvView,ConvSession,ConvOut,ConvInConn,ConvOutConn,convVoice,CONV,CONV_THEIRS});
 </script>
-<script type="text/babel">/* ── LLM 위키 모드 ────────────────────────────────────────────────
-   ① 규칙 노트  — 위키의 문법·정돈 기준. 모든 위키 작업의 system 프롬프트가 된다
-   ② 물어보기   — 노트·메일·일정에서 근거를 찾아 답한다(Query)
-   ③ 수집       — 메일·메모를 기존 개념 노트에 합친다(Ingest)
-   ④ 점검       — 깨진 링크·고아 노트·오래된 노트를 찾아낸다(Lint)
-   검색은 글자를 찾고, 물어보기는 답을 만든다 — 둘은 다른 도구다 */
-
-const RULES_TITLE='위키 규칙';
-const RULES_TEMPLATE=`# 위키 규칙
-
-이 노트가 위키의 기준입니다. 물어보기 · 수집 · 정돈 · 점검이 모두 이 내용을 따릅니다. 마음대로 고치세요.
-
-## 노트 형식
-- 제목은 명사구 (예: 기준가격 산정)
-- 첫 줄은 한 문장 요약
-- 사실과 판단을 섞지 않는다 — 판단은 \`> 판단:\` 인용으로
-- 숫자는 단위와 기준 시점을 함께 적는다 (예: MOPJ 620 \$/t · 9월 1주)
-- 관련 개념은 \`## 관련\` 절에 [[링크]]로
-- 출처는 \`## 출처\` 절에 (메일 제목·날짜, 회의, 문서명)
-
-## 수집 규칙
-- 새 사실은 이미 있는 개념 노트에 합친다. 마땅한 노트가 없을 때만 새로 만든다
-- 값이 갱신되면 이전 값을 지우지 말고 \`(이전: …)\`로 남긴다
-- 원문 메일·메모는 버리지 않고 \`## 원문 메모\`로 접어 둔다
-
-## 금지
-- 추측을 사실처럼 쓰지 않는다. 불확실하면 \`#확인필요\` 태그를 단다
-- 한 노트에 여러 개념을 담지 않는다`;
-
-const getRulesNote=db=>(db.notes||[]).find(n=>n.title===RULES_TITLE);
-const wikiRules=db=>{const n=getRulesNote(db);return (n?n.md:RULES_TEMPLATE).slice(0,4000);};
-
-/* ── 찾기: 질문과 겹치는 말이 많은 자료를 고른다(로컬 계산, API 호출 없음) ── */
-const STOP=new Set(['그리고','하지만','어떻게','무엇','어디','언제','알려줘','정리해줘','해줘','대해','관련','내용','정보','이거','저거','우리','너무','정도','때문','대한','있는','없는','하는','되는']);
-function wTokens(s){return [...new Set((s||'').toLowerCase().replace(/[^0-9a-z가-힣]+/g,' ').split(' ')
-  .filter(t=>t.length>=2&&!STOP.has(t)))];}
-function wScore(toks,title,body){let s=0;const T=(title||'').toLowerCase(),B=(body||'').toLowerCase();
-  toks.forEach(t=>{if(T.includes(t))s+=4;
-    let i=0,c=0;while(c<4){const j=B.indexOf(t,i);if(j<0)break;c++;i=j+t.length;}s+=c;});
-  return s;}
-/* 질문과 관련된 노트·메일·일정을 점수순으로 */
-function wRetrieve(db,q,lim={notes:8,mails:6,events:6}){
-  const toks=wTokens(q);if(!toks.length)return {notes:[],mails:[],events:[],toks};
-  const pick=(arr,f,n)=>arr.map(x=>({x,s:f(x)})).filter(o=>o.s>0).sort((a,b)=>b.s-a.s).slice(0,n).map(o=>o.x);
-  return {
-    toks,
-    notes:pick((db.notes||[]).filter(n=>n.title!==RULES_TITLE),n=>wScore(toks,n.title,n.md),lim.notes),
-    mails:pick(db.mails||[],m=>wScore(toks,m.subject,m.body),lim.mails),
-    events:pick(db.events||[],e=>wScore(toks,e.title,(e.notes||'')+' '+(e.category||'')),lim.events),
-  };
-}
-const cut=(s,n)=>{s=s||'';return s.length>n?s.slice(0,n)+'\n…(줄임)':s;};
-function wContext(r){
-  const parts=[];
-  r.notes.forEach(n=>parts.push('### 노트: '+n.title+'\n'+cut(splitRaw(n.md)[0],1600)));
-  r.mails.forEach(m=>parts.push('### 메일: '+m.subject+'\n보낸 사람: '+m.from+' · 날짜: '+String(m.date).slice(0,16).replace('T',' ')+'\n'+cut(m.body,1100)));
-  r.events.forEach(e=>parts.push('### 일정: '+e.title+'\n'+e.date+(e.start?' '+e.start:'')+' · '+(STATUS_LABEL[e.status]||'')+(e.category?' · '+e.category:'')
-    +(e.dateEnd&&e.dateEnd!==e.date?'\n기간: '+e.date+' ~ '+e.dateEnd:'')+(e.notes?'\n'+cut(e.notes,600):'')));
-  return parts.join('\n\n');
-}
-/* ── 물어보기 ── */
-async function wikiAsk(db,q){
-  const r=wRetrieve(db,q);
-  const n=r.notes.length+r.mails.length+r.events.length;
-  if(!n)return {text:'관련된 자료를 찾지 못했습니다. 다른 낱말로 물어보거나, 먼저 그 내용을 노트로 적어두세요.',r};
-  const sys='너는 hong의 개인 업무 위키를 담당하는 사서다. 아래 위키 규칙을 지키고, 주어진 자료에 있는 내용만으로 한국어로 답한다.\n\n'
-    +'--- 위키 규칙 ---\n'+wikiRules(db);
-  const prompt='다음은 hong의 노트·메일·일정에서 질문과 관련해 찾아낸 자료다.\n\n'+wContext(r)
-    +'\n\n---\n질문: '+q
-    +'\n\n답변 형식:\n1) 결론을 2~4문장으로 먼저.\n2) 「근거」 목록 — 각 줄 끝에 출처를 노트면 [[노트 제목]], 메일이면 (메일: 제목), 일정이면 (일정: 제목) 형태로 붙인다.\n'
-    +'3) 자료에 없는 것은 지어내지 말고 「자료에 없음」이라고 적는다.\n4) 마지막 줄에 「위키에 추가하면 좋을 것: …」 한 줄.';
-  const text=await askClaude(prompt,{system:sys,max_tokens:1400});
-  return {text,r};
-}
-/* ── 수집: 원문 하나를 어느 개념 노트에 어떻게 합칠지 제안받는다 ── */
+<script type="text/babel">
+/* ── Claude 답에서 JSON 꺼내기 ── */
 /* 큰따옴표 문자열 안의 진짜 줄바꿈·탭을 이스케이프해 준다 —
    모델이 마크다운을 JSON 문자열에 넣을 때 자주 날것으로 흘리는데, 그러면 JSON.parse가 실패한다 */
 function fixJSONNewlines(t){
@@ -38069,81 +37466,6 @@ function grabJSON(t){
     try{return JSON.parse(fixJSONNewlines(c));}catch(_){}}
   return null;
 }
-/* 노트 본문에서 첨부 링크와 「원문 메모」 절을 걷어낸다 — 그대로 보내면 길이만 잡아먹고 결과가 잘린다 */
-const leanMd=md=>splitRaw(md||'')[0]
-  .replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'')
-  .replace(/\n{3,}/g,'\n\n').trim();
-const srcText=s=>s.kind==='mail'
-  ? '제목: '+s.item.subject+'\n보낸 사람: '+s.item.from+'\n날짜: '+String(s.item.date).slice(0,16).replace('T',' ')+'\n\n'+cut(s.item.body,2600)
-  : s.kind==='event'
-  ? '일정: '+s.item.title+'\n'+s.item.date+(s.item.start?' '+s.item.start:'')+'\n'+cut(s.item.notes||'',1600)
-  : '노트: '+s.item.title+'\n\n'+cut(leanMd(s.item.md),2600);
-const srcTitle=s=>s.kind==='mail'?s.item.subject:s.item.title;
-const srcLabel=s=>s.kind==='mail'?'메일':s.kind==='event'?'일정':'노트';
-async function wikiIngest(db,notes,src){
-  const q=srcTitle(src)+' '+(src.kind==='mail'?cut(src.item.body,600):'');
-  const cand=wRetrieve({notes,mails:[],events:[]},q,{notes:3,mails:0,events:0}).notes;
-  const titles=notes.filter(n=>n.title!==RULES_TITLE).map(n=>n.title);
-  const sys='너는 hong의 개인 업무 위키를 관리한다. 아래 규칙에 맞춰 원문을 개념 노트로 흡수시킨다.\n\n--- 위키 규칙 ---\n'+wikiRules(db);
-  const prompt='## 지금 있는 노트 제목\n'+(titles.join(' · ')||'(없음)')
-    +'\n\n## 후보 노트 전문\n'+(cand.length?cand.map(n=>'### '+n.title+'\n'+cut(leanMd(n.md),1300)).join('\n\n'):'(관련 노트 없음)')
-    +'\n\n## 흡수할 원문 ('+srcLabel(src)+')\n'+srcText(src)
-    +'\n\n원문의 새로운 사실을 가장 알맞은 개념 노트 하나에 합쳐라. 마땅한 노트가 없으면 새로 만든다.'
-    +' 기존 내용을 지우지 말고 갱신·추가하며, 원문은 노트 맨 아래 "## 원문 메모" 절에 접어 넣는다.'
-    +' 출처는 "## 출처" 절에 한 줄 추가한다.'
-    +' 원문 메모는 핵심만 남겨 짧게 접는다(원문 전체를 다시 옮겨 적지 말 것).'
-    +'\n\n설명 없이 아래 JSON만 출력한다. md 안의 줄바꿈은 반드시 \\n 으로 적는다:\n'
-    +'{"target":"대상 노트 제목","isNew":true 또는 false,"scope":"work" 또는 "personal","why":"무엇을 왜 바꿨는지 한 줄","md":"노트 전체 마크다운(제목 # 부터)"}';
-  /* 결과가 잘리면(닫는 중괄호 없음) 더 짧게 쓰라고 한 번 더 부탁한다 */
-  const ask=async extra=>{
-    const r=await askClaude(prompt+(extra||''),{system:sys,max_tokens:4000});
-    return {raw:r,j:grabJSON(r)};
-  };
-  let {raw,j}=await ask();
-  if(!j||!j.md)({raw,j}=await ask('\n\n※ 앞서 답이 너무 길어 잘렸다. md 는 2500자 이내로 압축하고, 원문 메모는 3줄 요약으로 줄여라. 오직 JSON 한 덩어리만 출력하라.'));
-  if(!j||!j.md){
-    const why=/\{/.test(raw||'')?'답이 길어서 중간에 잘렸습니다':'JSON 형식이 아닌 답이 왔습니다';
-    throw new Error(why+' — 원문이 긴 노트는 「위키 정돈」으로 먼저 줄인 뒤 수집하면 잘 됩니다');
-  }
-  const exist=notes.find(n=>n.title===j.target);
-  return {target:j.target||srcTitle(src),isNew:!exist,scope:j.scope||'work',why:j.why||'',md:j.md,before:exist?exist.md:'',id:exist?exist.id:null};
-}
-/* ── 점검: API 없이 로컬 계산 ── */
-function wikiLint(db){
-  const notes=(db.notes||[]).filter(n=>n.title!==RULES_TITLE);
-  const byTitle={};notes.forEach(n=>{byTitle[n.title]=n;});
-  const out=[];const now=Date.now();
-  const push=(type,note,label,extra)=>out.push({type,note,label,...extra});
-  const inLinks={};notes.forEach(n=>wikiLinks(n.md).forEach(t=>{inLinks[t]=(inLinks[t]||0)+1;}));
-  notes.forEach(n=>{
-    const links=wikiLinks(n.md);
-    links.forEach(t=>{if(!byTitle[t])push('broken',n,t,{link:t});});
-    if(!links.length&&!inLinks[n.title])push('orphan',n,'연결 없음');
-    if(splitRaw(n.md)[0].replace(/^#.*$/m,'').trim().length<40)push('thin',n,'내용이 거의 없음');
-    if(/#확인필요/.test(n.md))push('check',n,'확인 필요 표시');
-    if(!/^##\s*출처/m.test(n.md)&&splitRaw(n.md)[0].length>200)push('nosrc',n,'출처 절 없음');
-    const age=Math.round((now-new Date(n.updated||0).getTime())/864e5);
-    if(age>=120)push('stale',n,age+'일째 그대로',{age});
-  });
-  /* 제목이 겹치거나 낱말이 많이 겹치는 노트 짝 */
-  const tk=notes.map(n=>({n,t:new Set(wTokens(n.title+' '+splitRaw(n.md)[0].slice(0,600)))}));
-  const dup=[];
-  for(let i=0;i<tk.length;i++)for(let j=i+1;j<tk.length;j++){
-    const a=tk[i],b=tk[j];if(!a.t.size||!b.t.size)continue;
-    let inter=0;a.t.forEach(x=>{if(b.t.has(x))inter++;});
-    const sim=inter/Math.min(a.t.size,b.t.size);
-    if(sim>=0.55&&inter>=4)dup.push({a:a.n,b:b.n,sim});}
-  dup.sort((x,y)=>y.sim-x.sim);
-  return {issues:out,dup:dup.slice(0,8),total:notes.length};
-}
-const LINT_KIND={
-  broken:{label:'깨진 링크',desc:'가리키는 노트가 없습니다',tone:'warn'},
-  orphan:{label:'외딴 노트',desc:'들어오고 나가는 링크가 모두 없습니다',tone:'muted'},
-  thin:{label:'빈 노트',desc:'내용이 거의 없습니다',tone:'muted'},
-  check:{label:'확인 필요',desc:'#확인필요 표시가 남아 있습니다',tone:'warn'},
-  nosrc:{label:'출처 없음',desc:'규칙이 요구하는 ## 출처 절이 없습니다',tone:'muted'},
-  stale:{label:'오래된 노트',desc:'넉 달 넘게 손대지 않았습니다',tone:'muted'},
-};
 
 
 /* ── 녹취 정리·번역 ───────────────────────────────────────────────
@@ -38228,160 +37550,10 @@ async function polishTranscript(raw,opt={}){
     +'\n\n### 한국어\n'+korean
     +'\n\n### 정리된 원문\n'+zh.join('\n\n');
 }
-/* ══ 화면 ══════════════════════════════════════════════════ */
-const ASK_EXAMPLES=['9월 기준가격은 어떻게 잡았지?','이번 주에 회신해야 할 메일','손익추정 프로세스 요약해줘','최근에 정한 것들 정리'];
-function AskView({db,setDb,st,set,toast,onOpenNote}){
-  const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
-  const [q,setQ]=React.useState(st.askQ||'');const [busy,setBusy]=React.useState(false);
-  const a=st.answer||null;
-  const run=async(text)=>{const query=(text!==undefined?text:q).trim();if(!query||busy)return;
-    setQ(query);setBusy(true);set({askQ:query,answer:null});
-    try{const {text:ans,r}=await wikiAsk(db,query);
-      set({answer:{q:query,text:ans,used:{notes:r.notes,mails:r.mails,events:r.events},at:nowStamp()},
-        askLog:[query,...(st.askLog||[]).filter(x=>x!==query)].slice(0,8)});}
-    catch(e){toast('⚠ '+e.message);}
-    setBusy(false);};
-  const saveNote=()=>{const n=newNote(a.q,'work','# '+a.q+'\n\n'+a.text+'\n\n## 출처\n- 위키 물어보기 · '+todayISO());
-    setDb('notes',arr=>[...arr,n]);onOpenNote(n.id);toast('노트로 저장');};
-  const used=a?a.used:null;const nUsed=used?used.notes.length+used.mails.length+used.events.length:0;
-  return <Card title="물어보기" badge={<Badge tone="muted">노트 · 메일 · 일정에서 근거를 찾아 답합니다</Badge>}
-    toolbarRight={a&&<><Button variant="gray" size="sm" onClick={saveNote}>답변을 노트로</Button><Button variant="ghost" size="sm" onClick={()=>set({answer:null})}>지우기</Button></>}>
-    <div style={{display:'flex',gap:6,marginBottom:8}}>
-      <TextInput autoFocus value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')run();}}
-        placeholder="예: 9월 기준가격 어떻게 잡았지?" style={{flex:1,fontSize:15,padding:'8px 12px'}}/>
-      <Button icon="🤖" disabled={busy||!q.trim()} onClick={()=>run()}>{busy?'찾는 중…':'물어보기'}</Button>
-    </div>
-    {!a&&!busy&&<>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
-        {ASK_EXAMPLES.map(x=><Chip key={x} onClick={()=>run(x)}>{x}</Chip>)}</div>
-      <InfoBar>검색은 <b>글자</b>를 찾고, 물어보기는 <b>답</b>을 만듭니다. 노트·메일·일정에서 관련 자료를 골라 Claude에게 근거로 주고, 답에는 [[노트]]·(메일: …) 형태의 출처가 붙습니다. 자료에 없으면 없다고 답하게 되어 있습니다.</InfoBar>
-      {(st.askLog||[]).length>0&&<div style={{marginTop:12}}>
-        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>최근 질문</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{st.askLog.map(x=><Chip key={x} onClick={()=>run(x)}>{x}</Chip>)}</div></div>}
-    </>}
-    {busy&&<div style={{padding:30,textAlign:'center',color:'var(--text-label)'}}>자료를 찾아 읽는 중…</div>}
-    {a&&<div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 300px',gap:12,alignItems:'start'}}>
-      <div style={{border:'1px solid var(--border-default)',padding:'14px 18px',minWidth:0}}>
-        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:8}}>❓ {a.q}</div>
-        <Markdown md={a.text} onWiki={t=>{const n=db.notes.find(x=>x.title===t);if(n)onOpenNote(n.id);else toast('그런 노트가 없습니다 · '+t);}}/>
-      </div>
-      <div style={{border:'1px solid var(--border-default)',padding:'10px 12px',fontSize:'var(--fs-sm)'}}>
-        <div style={{fontWeight:600,marginBottom:6}}>📎 근거로 읽은 자료 {nUsed}</div>
-        {used.notes.map(n=><div key={n.id} onClick={()=>onOpenNote(n.id)} style={{padding:'3px 0',cursor:'pointer',color:'var(--color-accent)'}}>📄 {n.title}</div>)}
-        {used.mails.map(m=><div key={m.id} style={{padding:'3px 0',color:'var(--text-muted)'}}>✉ {m.subject}</div>)}
-        {used.events.map(e=><div key={e.id} style={{padding:'3px 0',color:'var(--text-muted)'}}>📅 {e.title}</div>)}
-        {!nUsed&&<div style={{color:'var(--text-label)'}}>없음</div>}
-      </div>
-    </div>}
-  </Card>;
-}
-/* 수집 모달: 원문 여러 건을 한 건씩 제안 → 확인 후 적용 */
-function IngestModal({open,sources,db,setDb,onClose,toast}){
-  const {Modal,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
-  const [i,setI]=React.useState(0);const [busy,setBusy]=React.useState(false);
-  const [p,setP]=React.useState(null);const [err,setErr]=React.useState('');const [done,setDone]=React.useState(0);
-  const work=React.useRef(null);
-  React.useEffect(()=>{if(open){work.current=db.notes.slice();setI(0);setP(null);setErr('');setDone(0);}},[open]);
-  const src=sources&&sources[i];
-  const propose=async()=>{setBusy(true);setErr('');setP(null);
-    try{setP(await wikiIngest(db,work.current,src));}catch(e){setErr(e.message);}setBusy(false);};
-  React.useEffect(()=>{if(open&&src&&!p&&!busy&&!err)propose();},[open,i]);
-  if(!open||!src)return null;
-  const next=()=>{if(i+1<sources.length){setI(i+1);setP(null);setErr('');}else{onClose();toast(done?done+'건을 위키에 수집했습니다':'수집을 끝냈습니다');}};
-  const apply=()=>{
-    let arr=work.current;
-    if(p.id){arr=arr.map(n=>n.id===p.id?{...n,md:p.md,updated:nowStamp()}:n);}
-    else{arr=[...arr,{...newNote(p.target,p.scope,p.md),updated:nowStamp()}];}
-    work.current=arr;
-    /* 오래 걸리는 작업이라 그 사이 다른 화면에서 노트가 늘거나 줄 수 있다 —
-       지금 저장된 목록을 바탕으로 이번에 바뀐 것만 얹는다(통째로 덮어쓰지 않는다) */
-    const touched=p.id?arr.find(n=>n.id===p.id):arr[arr.length-1];
-    setDb('notes',cur=>{
-      if(!touched)return cur;
-      return cur.some(n=>n.id===touched.id)?cur.map(n=>n.id===touched.id?touched:n):[...cur,touched];
-    });
-    setDone(d=>d+1);next();};
-  const lines=s=>(s||'').split('\n');
-  const beforeL=lines(p&&p.before),afterL=lines(p&&p.md);
-  const bset=new Set(beforeL),aset=new Set(afterL);
-  return <Modal open={open} onClose={onClose} title="🤖 위키에 수집" width={900}
-    footer={<><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{i+1} / {sources.length} · 적용 {done}건</span>
-      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
-        <Button variant="ghost" size="sm" onClick={next}>건너뛰기</Button>
-        <Button variant="gray" size="sm" disabled={busy} onClick={propose}>다시 제안</Button>
-        <Button disabled={!p||busy} onClick={apply}>이대로 적용</Button></span></>}>
-    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:8}}>
-      <Badge tone="muted">{srcLabel(src)}</Badge> <b style={{marginLeft:6}}>{srcTitle(src)}</b></div>
-    {busy&&<div style={{padding:30,textAlign:'center',color:'var(--text-label)'}}>어느 노트에 합칠지 생각하는 중…</div>}
-    {err&&<InfoBar tone="warn">{err}</InfoBar>}
-    {p&&<>
-      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,marginBottom:8}}>
-        <Badge tone={p.isNew?'linked':'muted'}>{p.isNew?'새 노트':'기존 노트에 합침'}</Badge>
-        <b>{p.target}</b><span style={{color:'var(--text-muted)',fontSize:'var(--fs-sm)'}}>{p.why}</span></div>
-      {(()=>{const lost=beforeL.filter(l=>l.trim()&&!aset.has(l)).length;
-        return p.before&&lost>Math.max(3,beforeL.length*0.3)
-          ? <div style={{marginBottom:8}}><InfoBar tone="warn">원래 내용 {lost}줄이 사라집니다 — 지우면 안 되는 내용인지 왼쪽(붉은 줄)에서 확인하세요</InfoBar></div>
-          : null;})()}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,maxHeight:'46vh',overflow:'auto'}}>
-        <div>
-          <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>지금</div>
-          <pre style={{font:'12px/1.65 var(--font-sans)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-default)',background:'var(--surface-hover)'}}>
-            {p.before?beforeL.map((l,k)=><div key={k} style={{background:l.trim()&&!aset.has(l)?'var(--color-danger-surface)':'transparent'}}>{l||' '}</div>):<span style={{color:'var(--text-label)'}}>(새로 만드는 노트)</span>}</pre>
-        </div>
-        <div>
-          <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>바뀐 뒤</div>
-          <pre style={{font:'12px/1.65 var(--font-sans)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-strong)'}}>
-            {afterL.map((l,k)=><div key={k} style={{background:l.trim()&&!bset.has(l)?'var(--wb-yellow-hl)':'transparent'}}>{l||' '}</div>)}</pre>
-        </div>
-      </div>
-    </>}
-  </Modal>;
-}
-/* 점검 화면 */
-function LintView({db,setDb,toast,onOpenNote}){
-  const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
-  const {issues,dup,total}=React.useMemo(()=>wikiLint(db),[db.notes]);
-  const groups={};issues.forEach(x=>{(groups[x.type]=groups[x.type]||[]).push(x);});
-  const upd=(id,patch)=>setDb('notes',arr=>arr.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
-  const makeNote=(x)=>{const n=newNote(x.link,x.note.scope||'work');setDb('notes',arr=>[...arr,n]);toast('노트 생성 · '+x.link);};
-  const dropLink=(x)=>upd(x.note.id,{md:removeWikiLink(x.note.md,x.link)});
-  const order=['broken','check','thin','orphan','nosrc','stale'];
-  const none=!issues.length&&!dup.length;
-  return <Card title="점검" badge={<Badge tone={none?'linked':'muted'}>{none?'문제 없음':issues.length+'건'}</Badge>}>
-    <InfoBar>규칙 노트(<b>{RULES_TITLE}</b>)를 기준으로 위키를 훑습니다. 노트 {total}개 · Claude를 쓰지 않는 로컬 점검이라 비용이 들지 않습니다.</InfoBar>
-    {none&&<div style={{padding:30,textAlign:'center',color:'var(--text-label)'}}>깨끗합니다 ✓</div>}
-    {order.filter(k=>groups[k]).map(k=><div key={k} style={{marginTop:14}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
-        <b style={{fontSize:'var(--fs-md)'}}>{LINT_KIND[k].label}</b>
-        <Badge tone="muted">{groups[k].length}</Badge>
-        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{LINT_KIND[k].desc}</span></div>
-      {groups[k].map((x,idx)=><div key={k+idx} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 8px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-base)'}}>
-        <span onClick={()=>onOpenNote(x.note.id)} style={{cursor:'pointer',color:'var(--color-accent)',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>📄 {x.note.title}</span>
-        <span style={{color:'var(--text-muted)'}}>{k==='broken'?'[['+x.link+']]':x.label}</span>
-        {k==='broken'&&<><Button variant="gray" size="xs" onClick={()=>makeNote(x)}>노트 만들기</Button>
-          <Button variant="ghost" size="xs" onClick={()=>dropLink(x)}>링크 지우기</Button></>}
-      </div>)}
-    </div>)}
-    {dup.length>0&&<div style={{marginTop:16}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
-        <b style={{fontSize:'var(--fs-md)'}}>겹쳐 보이는 노트</b><Badge tone="muted">{dup.length}</Badge>
-        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>같은 개념을 두 곳에 적었을 수 있습니다 — 열어서 확인하고 하나로 합치세요</span></div>
-      {dup.map((d,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 8px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-base)'}}>
-        <span onClick={()=>onOpenNote(d.a.id)} style={{cursor:'pointer',color:'var(--color-accent)'}}>📄 {d.a.title}</span>
-        <span style={{color:'var(--text-label)'}}>↔</span>
-        <span onClick={()=>onOpenNote(d.b.id)} style={{cursor:'pointer',color:'var(--color-accent)'}}>📄 {d.b.title}</span>
-        <span style={{marginLeft:'auto',fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{Math.round(d.sim*100)}% 겹침</span>
-      </div>)}
-    </div>}
-  </Card>;
-}
-Object.assign(window,{polishTranscript,transcriptFixes,splitChunks,POLISH_CHUNK,RULES_TITLE,RULES_TEMPLATE,getRulesNote,wikiRules,wikiAsk,wikiIngest,wikiLint,
-  wRetrieve,AskView,IngestModal,LintView,srcTitle,srcLabel});
+Object.assign(window,{polishTranscript,transcriptFixes,splitChunks,POLISH_CHUNK});
 </script>
-<script type="text/babel">/* ── 옵시디언 호환 vault 내보내기·가져오기 ────────────────────────
-   이 앱이 없어져도 지식은 남는다 — 노트를 폴더 구조의 .md 묶음(ZIP)으로 내보내고 다시 읽어들인다.
-   ZIP 만들기·풀기를 직접 구현했다(외부 라이브러리 없음). 압축 없이 저장(store)하고,
-   남이 만든 ZIP은 브라우저 내장 DecompressionStream으로 푼다. */
+<script type="text/babel">/* ── ZIP 만들기 (Word 파일 저장에 쓴다) ─────────────────────
+   외부 라이브러리 없이 직접 구현했다. 압축 없이 저장(store)한다 */
 
 /* CRC-32 — ZIP이 요구하는 검사값 */
 function crc32(buf){
@@ -38412,181 +37584,9 @@ function zipMake(files){
   ev.setUint32(12,csize,true);ev.setUint32(16,off,true);
   return new Blob([...body,...central,end],{type:'application/zip'});
 }
-/* ZIP → [{name,text}] (.md 파일만) */
-async function zipRead(ab){
-  const u=new Uint8Array(ab),dv=new DataView(ab),dec=new TextDecoder();
-  let e=-1;for(let i=u.length-22;i>=0&&i>u.length-70000;i--)if(dv.getUint32(i,true)===0x06054b50){e=i;break;}
-  if(e<0)throw new Error('ZIP 파일이 아닙니다');
-  const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);const out=[];
-  for(let i=0;i<n;i++){
-    const nl=dv.getUint16(p+28,true),el=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true);
-    const method=dv.getUint16(p+10,true),csize=dv.getUint32(p+20,true),lo=dv.getUint32(p+42,true);
-    const name=dec.decode(u.slice(p+46,p+46+nl));
-    p+=46+nl+el+cl;
-    const isMd=/\.(md|markdown|txt)$/i.test(name);
-    if(name.endsWith('/'))continue;
-    const start=lo+30+dv.getUint16(lo+26,true)+dv.getUint16(lo+28,true);
-    const raw=u.slice(start,start+csize);
-    let bytes=raw;
-    if(method===8){
-      if(!window.DecompressionStream)throw new Error('이 브라우저는 ZIP 압축 해제를 못 합니다 — 압축을 풀어 파일들을 드롭하세요');
-      const ds=new DecompressionStream('deflate-raw');
-      bytes=new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer());}
-    else if(method!==0)throw new Error('지원하지 않는 압축 방식입니다 — 압축을 풀어 파일들을 드롭하세요');
-    out.push(isMd?{name,text:dec.decode(bytes)}:{name,bytes});}
-  return out;
-}
-/* ── 머리말(YAML frontmatter) ── */
-function fmParse(md){
-  const m=/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(md||'');
-  if(!m)return {meta:{},body:md||''};
-  const meta={};
-  m[1].split(/\r?\n/).forEach(l=>{const i=l.indexOf(':');if(i<0)return;
-    const k=l.slice(0,i).trim();let v=l.slice(i+1).trim();
-    if(/^\[.*\]$/.test(v))meta[k]=v.slice(1,-1).split(',').map(x=>x.trim().replace(/^["']|["']$/g,'')).filter(Boolean);
-    else meta[k]=v.replace(/^["']|["']$/g,'');});
-  return {meta,body:(md||'').slice(m[0].length)};
-}
-const yamlVal=v=>Array.isArray(v)?'['+v.join(', ')+']':(/[:#]/.test(String(v))?'"'+v+'"':String(v));
-const fmBuild=o=>'---\n'+Object.entries(o).filter(([,v])=>v!==undefined&&v!=='').map(([k,v])=>k+': '+yamlVal(v)).join('\n')+'\n---\n\n';
 /* 파일 이름으로 쓸 수 없는 글자 정리 */
 const safeName=s=>(s||'제목 없음').replace(/[\\/:*?"<>|#^[\]]/g,' ').replace(/\s+/g,' ').trim().slice(0,80)||'제목 없음';
-
-const VAULT_README=`# 개인 업무 위키 vault
-
-개인 업무 관리 시스템에서 내보낸 노트입니다. 이 폴더를 그대로 **옵시디언에서 "폴더를 vault로 열기"** 하면 바로 읽힙니다.
-
-- \`업무/\`, \`개인/\` — 노트. 파일 첫머리의 \`---\` 사이는 제목·태그·수정일이며 옵시디언이 속성으로 읽습니다
-- \`[[제목]]\` 링크와 \`#태그\`는 옵시디언에서 그대로 동작합니다
-- \`메일/\`, \`일정/\` — 함께 내보냈다면 기록용 사본입니다
-
-다시 앱으로 가져오려면 통번역 › 번역·전사 › **vault**에 이 ZIP(또는 .md 파일들)을 넣으면 됩니다.
-`;
-
-/* db → 내보낼 파일 목록 */
-function vaultFiles(db,opt){
-  const files=[{name:'README.md',text:VAULT_README}];
-  const used={};
-  const uniq=p=>{if(!used[p]){used[p]=1;return p;}used[p]++;return p.replace(/\.md$/,'')+' ('+used[p]+').md';};
-  /* 첨부: pms:경로 → 첨부/파일명 으로 바꾸고 어떤 파일을 담아야 하는지 모아 둔다 */
-  const atts=[];const seen={};
-  const attName=(path,label)=>{if(seen[path])return seen[path];
-    const ext=(/\.[0-9a-zA-Z]{1,8}$/.exec(path)||[''])[0];
-    const fromLabel=safeName(String(label||'').replace(/^[📎🎙🖼]\s*/,'').replace(/\.[0-9a-zA-Z]{1,8}$/,''));
-    let base=(fromLabel&&fromLabel!=='제목 없음'?fromLabel:(path.split('/').pop()||'file').replace(/^[0-9a-z]+-/,''))+ (fromLabel?ext:'');
-    if(!/\.[0-9a-zA-Z]{1,8}$/.test(base))base+=ext;
-    let n=base,i=1;while(Object.values(seen).includes(n))n=base.replace(/(\.[^.]+)?$/,' ('+(++i)+')$1');
-    seen[path]=n;atts.push({path,name:n});return n;};
-  const swap=md=>(md||'').replace(/(!?\[)([^\]]*)(\]\()pms:([^)]+)(\))/g,(m,a,label,c,path,b)=>a+label+c+'첨부/'+attName(path.trim(),label)+b);
-  (db.notes||[]).forEach(n=>{
-    const scope=n.scope==='personal'?'개인':'업무';
-    const [main,raw]=splitRaw(n.md||'');
-    const text=fmBuild({title:n.title,scope,tags:n.tags||[],updated:(n.updated||'').slice(0,19)})
-      +swap((opt.raw?(n.md||''):main)).replace(/^\s+/,'');
-    files.push({name:uniq(scope+'/'+safeName(n.title)+'.md'),text});
-  });
-  if(opt.mails)(db.mails||[]).forEach(m=>{
-    const d=String(m.date||'').slice(0,10);
-    const text=fmBuild({title:m.subject,type:'mail',from:m.from,to:m.to,date:String(m.date||'').slice(0,19),tags:m.tags||[]})
-      +'# '+(m.subject||'(제목 없음)')+'\n\n'+(m.body||'')+((m.attachments||[]).length?'\n\n첨부: '+m.attachments.join(', '):'');
-    files.push({name:uniq('메일/'+d+' '+safeName(m.subject)+'.md'),text});
-  });
-  if(opt.events)(db.events||[]).forEach(e=>{
-    const text=fmBuild({title:e.title,type:'event',date:e.date,dateEnd:e.dateEnd||'',start:e.start,end:e.end,
-      calendar:e.cal==='personal'?'개인':'회사',status:STATUS_LABEL[e.status]||e.status,category:e.category||''})
-      +'# '+(e.title||'(제목 없음)')+'\n\n'+(e.notes||'');
-    files.push({name:uniq('일정/'+String(e.date||'').slice(0,7)+' '+safeName(e.title)+'.md'),text});
-  });
-  return {files,atts};
-}
-/* 읽어들인 .md 텍스트 → 노트 객체 */
-function fileToNote(name,text){
-  const {meta,body}=fmParse(text);
-  const base=name.split('/').pop().replace(/\.(md|markdown|txt)$/i,'');
-  const title=meta.title||(/^#\s+(.+)$/m.exec(body)||[])[1]||base;
-  const scope=/개인|personal/i.test(meta.scope||name.split('/')[0]||'')?'personal':'work';
-  let tags=meta.tags||[];if(typeof tags==='string')tags=tags.split(/[, ]+/).filter(Boolean);
-  return {title:String(title).trim(),scope,tags:tags.map(t=>String(t).replace(/^#/,'')),
-    md:body.trim()?body:'# '+title+'\n',updated:meta.updated||nowStamp()};
-}
-/* 파일들 → 기존 노트에 병합. same=true 면 같은 제목은 갱신, false 면 새 노트로 */
-function mergeNotes(notes,items,same,attMap){
-  let add=0,upd=0;let out=notes.slice();
-  items.forEach(it=>{
-    if(/^README/i.test(it.name))return;
-    const n=fileToNote(it.name,it.text);
-    if(attMap)n.md=n.md.replace(/(!?\[[^\]]*\]\()(?:\.\.\/)?첨부\/([^)]+)(\))/g,(m,a,name,b)=>attMap[name.trim()]?a+'pms:'+attMap[name.trim()]+b:m);
-    if(n.title===RULES_TITLE&&out.some(x=>x.title===RULES_TITLE)){ /* 규칙 노트는 덮어쓰지 않는다 */ }
-    const hit=same?out.find(x=>x.title===n.title):null;
-    if(hit){out=out.map(x=>x.id===hit.id?{...x,md:n.md,tags:[...new Set([...(x.tags||[]),...n.tags])],scope:n.scope,updated:nowStamp()}:x);upd++;}
-    else{out.push(newNote(n.title,n.scope,n.md,n.tags));add++;}});
-  return {notes:out,add,upd};
-}
-/* ── 화면 ── */
-function VaultModal({open,onClose,db,setDb,toast}){
-  const {Modal,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
-  const [opt,setOpt]=React.useState({mails:false,events:false,raw:true,same:true,atts:true});
-  const [busy,setBusy]=React.useState('');
-  if(!open)return null;
-  const set=k=>e=>setOpt(o=>({...o,[k]:e.target.checked}));
-  const {files,atts}=vaultFiles(db,opt);
-  const doExport=async()=>{setBusy('내보내는 중…');
-    let out=files;
-    if(opt.atts&&atts.length){ /* 이미지·PDF도 담는다 */
-      const bin=[];
-      for(let i=0;i<atts.length;i++){setBusy('첨부 '+(i+1)+'/'+atts.length);
-        try{const b=await Files.blob(atts[i].path);bin.push({name:'첨부/'+atts[i].name,bytes:new Uint8Array(await b.arrayBuffer())});}catch(_){}}
-      out=files.concat(bin);}
-    const blob=zipMake(out);const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);a.download='pms-vault-'+todayISO()+'.zip';a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href),4000);setBusy('');toast(out.length+'개 파일을 ZIP으로 내보냈습니다');};
-  const doImport=async fs=>{setBusy('가져오는 중…');
-    try{
-      let items=[];
-      for(const f of fs){
-        if(/\.zip$/i.test(f.name))items=items.concat(await zipRead(await f.arrayBuffer()));
-        else if(/\.(md|markdown|txt)$/i.test(f.name))items.push({name:f.name,text:await f.text()});
-        else items.push({name:f.name,bytes:new Uint8Array(await f.arrayBuffer())});}
-      const mds=items.filter(x=>x.text!==undefined);
-      const bins=items.filter(x=>x.bytes&&/첨부\//.test(x.name));
-      if(!mds.length){toast('읽을 .md 파일이 없습니다');setBusy('');return;}
-      const attMap={};
-      for(let i=0;i<bins.length;i++){setBusy('첨부 올리는 중 '+(i+1)+'/'+bins.length);
-        const nm=bins[i].name.split('/').pop();
-        try{const r=await Files.put(new File([bins[i].bytes],nm,{type:guessType(nm)}));attMap[nm]=r.path;}catch(_){}}
-      const r=mergeNotes(db.notes,mds,opt.same,attMap);
-      /* 첨부를 올리는 동안 다른 화면에서 노트가 바뀌었을 수 있다 — 결과를 id 기준으로 얹는다 */
-      setDb('notes',cur=>{const m=new Map(cur.map(n=>[n.id,n]));(r.notes||[]).forEach(n=>m.set(n.id,n));return [...m.values()];});
-      toast('새 노트 '+r.add+'개 · 갱신 '+r.upd+'개');onClose();
-    }catch(e){toast('⚠ '+e.message);}
-    setBusy('');};
-  const row=(k,label,desc)=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'7px 10px',border:'1px solid var(--border-default)',borderRadius:4,cursor:'pointer',marginBottom:6}}>
-    <input type="checkbox" checked={!!opt[k]} onChange={set(k)} style={{marginTop:3}}/>
-    <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span>
-    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{desc}</div></span></label>;
-  return <Modal open={open} onClose={onClose} title="📦 vault 내보내기 · 가져오기" width={640}
-    footer={<><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{files.length}개 파일</span>
-      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
-        <Button variant="gray" onClick={onClose}>닫기</Button>
-        <Button icon="📦" disabled={!!busy} onClick={doExport}>ZIP 내보내기</Button></span></>}>
-    <InfoBar>노트를 <b>폴더 구조의 .md 묶음</b>으로 내보냅니다. 압축을 풀고 그 폴더를 옵시디언에서 「폴더를 vault로 열기」 하면 <code>[[링크]]</code>·<code>#태그</code>가 그대로 살아납니다. 이 앱을 쓰지 않게 되어도 지식은 남습니다.</InfoBar>
-    <div style={{margin:'10px 0 4px',font:'var(--type-card-title)'}}>내보낼 것</div>
-    {row('raw','원문 메모까지 포함','위키로 정돈한 노트 아래에 접어 둔 원본 기록까지 함께 내보냅니다')}
-    {row('atts','첨부 이미지·PDF도 함께','첨부/ 폴더에 실제 파일을 담고, 노트의 링크를 그 폴더로 바꿉니다(옵시디언에서 이미지가 그대로 보입니다)')}
-    {row('mails','메일도 함께','메일/ 폴더에 날짜 + 제목으로 한 건씩 저장합니다(기록용 사본)')}
-    {row('events','일정도 함께','일정/ 폴더에 월 + 제목으로 저장하고 마일스톤을 목록으로 적습니다')}
-    <div style={{margin:'14px 0 4px',font:'var(--type-card-title)'}}>가져오기</div>
-    {row('same','제목이 같으면 갱신','끄면 같은 제목이어도 새 노트로 추가합니다(옵시디언에서 고친 내용을 되돌릴 때는 켜 두세요)')}
-    <div style={{display:'flex',gap:8,alignItems:'center'}}>
-      <Button variant="classic" icon="📥" disabled={!!busy} onClick={()=>document.getElementById('vaultIn').click()}>{busy||'ZIP · .md 가져오기'}</Button>
-      <input id="vaultIn" type="file" accept=".zip,.md,.markdown,.txt" multiple style={{position:'absolute',width:0,height:0,opacity:0,pointerEvents:'none'}}
-        onChange={e=>{doImport([...e.target.files]);e.target.value='';}}/>
-      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>내보낸 ZIP을 그대로 넣어도 되고, 옵시디언에서 고친 .md 파일만 넣어도 됩니다</span>
-    </div>
-  </Modal>;
-}
-const guessType=n=>/\.png$/i.test(n)?'image/png':/\.(jpg|jpeg)$/i.test(n)?'image/jpeg':/\.gif$/i.test(n)?'image/gif':/\.webp$/i.test(n)?'image/webp':/\.pdf$/i.test(n)?'application/pdf':'application/octet-stream';
-Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileToNote,mergeNotes,VaultModal,safeName,crc32});
+Object.assign(window,{zipMake,safeName,crc32});
 </script>
 <script type="text/babel">/* ── 통번역 (팀용 앱) ─────────────────────────────────────────
    PMS에서 통역·녹취록 기능만 떼어 낸 가벼운 앱. 같은 Supabase 프로젝트·Edge Function을 쓴다.
@@ -38594,7 +37594,7 @@ Object.assign(window,{guessType,zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileT
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.13';
+const TB_VERSION='v10.14';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
