@@ -37519,8 +37519,12 @@ async function transcriptFixes(raw,hint){
   const j=grabJSON(r)||{};
   return {topic:j.topic||'',fixes:Array.isArray(j.fixes)?j.fixes.filter(f=>f&&f.wrong&&f.right).slice(0,15):[]};
 }
+/* 한글 비율로 한국어 녹취인지 가린다 — 한국어면 번역 없이 회의록용 정리본만 만든다 */
+const tbIsKorean=t=>{const s=String(t||'');const ko=(s.match(/[가-힣]/g)||[]).length;
+  const other=(s.match(/[\u4e00-\u9fff\u3040-\u30ffA-Za-z]/g)||[]).length;return ko>=20&&ko>=(ko+other)*0.6;};
 async function polishTranscript(raw,opt={}){
   const hint=opt.hint?('\n자주 나오는 고유명사: '+opt.hint):'';
+  if(opt.korean)return polishKorean(raw,opt,hint);
   opt.onStep&&opt.onStep('분야와 오인식 낱말 파악 중…');
   let fx={topic:'',fixes:[]};
   try{fx=await transcriptFixes(raw,opt.hint);}catch(_){}
@@ -37560,7 +37564,45 @@ async function polishTranscript(raw,opt={}){
     +'\n\n### 한국어\n'+korean
     +'\n\n### 정리된 원문\n'+zh.join('\n\n');
 }
-Object.assign(window,{polishTranscript,transcriptFixes,splitChunks,POLISH_CHUNK});
+/* 한국어 녹취 → 번역 없이 「요점 + 정리본」(회의록에 바로 쓰는 모양) */
+async function polishKorean(raw,opt,hint){
+  opt.onStep&&opt.onStep('분야와 오인식 낱말 파악 중…');
+  let fx={topic:'',fixes:[]};
+  try{fx=await transcriptFixes(raw,opt.hint);}catch(_){}
+  const ctx=(fx.topic?('\n이 녹취의 분야·주제: '+fx.topic):'')
+    +(fx.fixes.length?('\n기계가 잘못 받아쓴 낱말(반드시 바로잡을 것): '
+      +fx.fixes.map(f=>f.wrong+' → '+f.right).join(' · ')):'');
+  const parts=splitChunks(raw,POLISH_CHUNK);
+  const out=[];
+  for(let i=0;i<parts.length;i++){
+    opt.onStep&&opt.onStep('정리 '+(i+1)+'/'+parts.length);
+    const r=await askClaude(
+      '아래는 한국어 회의 녹음을 기계가 받아쓴 글의 일부다('+(i+1)+'/'+parts.length+').'+hint+ctx
+      +'\n\n회의록에 바로 옮겨 쓸 수 있게 다듬는다. 교정표와 분야 지식에 따라 **잘못 받아쓴 전문용어·고유명사를 적극적으로 바로잡고**,'
+      +' 군더더기(음, 어, 그래서 이제)와 같은 말 반복을 지우고, 끊긴 말은 자연스러운 문장으로 잇는다.'
+      +' 말한 순서와 사실관계·수치는 바꾸지 않고, 없는 내용을 지어내지 않는다. 주제가 바뀌는 곳에서 문단을 나눈다.'
+      +' 정해진 것·할 일은 문단 끝에 「→ 」로 적는다. 확실하지 않은 부분은 (?)로 표시한다.'
+      +' 앞뒤가 잘린 조각이므로 요약하거나 결론을 덧붙이지 않는다.'
+      +'\n\n다른 말 없이 다듬은 글만 출력한다.'
+      +'\n\n--- 받아쓴 글 ---\n'+parts[i],
+      {max_tokens:3000});
+    out.push((r||'').trim()||parts[i]);
+  }
+  const body=out.join('\n\n');
+  opt.onStep&&opt.onStep('요점 뽑는 중…');
+  let gist='';
+  for(let tryN=0;tryN<2&&!gist.trim();tryN++)try{gist=await askClaude(
+    '다음은 회의 녹취를 정리한 글이다. 이 회의에서 실제로 나온 내용만으로 「요점」을 5~8줄 만들어라.'
+    +' 숫자·기한·결정된 것·해야 할 일을 우선한다. 각 줄은 「- 」로 시작하는 한 문장. 다른 말은 쓰지 않는다.'
+    +'\n\n'+body.slice(0,14000),{max_tokens:900});}
+  catch(_){gist='';}
+  const note=(fx.topic?('> 분야: '+fx.topic+'  \n'):'')
+    +(fx.fixes.length?('> 바로잡은 낱말: '+fx.fixes.map(f=>f.wrong+'→'+f.right).join(' · ')+'  \n'):'');
+  return (note?note+'\n':'')
+    +'### 요점\n'+(gist.trim()||'(요점을 뽑지 못했습니다)')
+    +'\n\n### 정리본\n'+body;
+}
+Object.assign(window,{polishTranscript,polishKorean,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK});
 </script>
 <script type="text/babel">/* ── ZIP 만들기 (Word 파일 저장에 쓴다) ─────────────────────
    외부 라이브러리 없이 직접 구현했다. 압축 없이 저장(store)한다 */
@@ -37604,7 +37646,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.15';
+const TB_VERSION='v10.16';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38095,7 +38137,8 @@ const TB_JOBS=new Set();
 
 /* ── 녹취록 ── */
 function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,clearAuto}){
-  const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const {Card,Button,Badge,InfoBar,Modal}=window.HDWorkbookDesignSystem_ad60e4;
+  const [langOpen,setLangOpen]=React.useState(false);const upLang=React.useRef(null);
   const mobile=useMobile();
   const cur=recs.find(r=>r.id===sel)||null;
   const [busy,setBusy]=React.useState('');const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
@@ -38117,11 +38160,11 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   const picked=recs.filter(r=>pick.has(r.id));const pickN=picked.length;const pickFiles=picked.reduce((n,r)=>n+tbRecPaths(r).length,0);
 
   /* 받아쓰기 → 정리·번역 */
-  const runStt=async(rec0)=>{
+  const runStt=async(rec0,lng)=>{
     if(TB_JOBS.has(rec0.id))return;TB_JOBS.add(rec0.id);
-    try{await runSttInner(rec0);}finally{TB_JOBS.delete(rec0.id);}
+    try{await runSttInner(rec0,lng||rec0.lang||lang);}finally{TB_JOBS.delete(rec0.id);}
   };
-  const runSttInner=async(rec0)=>{
+  const runSttInner=async(rec0,lng)=>{
     let rec=rec0;const refs=audioRefs(rec.md);const file=local.current[rec.id];
     if(!refs.length&&!file){toast('이 기록에 녹음이 없습니다');return;}
     const sttM=tbApplyStt();const sttN=tbSttName(sttM);
@@ -38134,7 +38177,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         setBusy('녹음 불러오는 중'+tag+'…');
         const blob=j.blob||await Files.blob(j.path);
         secs+=await tbDuration(blob);
-        const txt=await transcribeBlob(blob,{srcName:j.name,name:'tb',language:lang,onStep:m=>setBusy(m+tag+' ('+sttN+')')});
+        const txt=await transcribeBlob(blob,{srcName:j.name,name:'tb',language:lng,onStep:m=>setBusy(m+tag+' ('+sttN+')')});
         all+=(all?'\n\n':'')+(jobs.length>1?'### '+j.name+'\n':'')+txt;
       }
       if(!all.trim())throw new Error('받아쓴 글이 비어 있습니다 — 녹음에 말소리가 있는지 확인하세요');
@@ -38158,24 +38201,29 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     const pm=modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id);
     setBusy('정리·번역 준비 중… ('+pm+')');
     try{
-      const out=await polishTranscript(raw.replace(/^>\s*받아쓰기 모델:.*$/m,'').trim(),{hint:Store.cfg.sttHint,onStep:m=>setBusy(m+' ('+pm+')')});
+      const src=raw.replace(/^>\s*받아쓰기 모델:.*$/m,'').trim();const korean=tbIsKorean(src);
+      const out=await polishTranscript(src,{hint:Store.cfg.sttHint,korean,onStep:m=>setBusy(m+' ('+pm+')')});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
-      upd(rec.id,{md:tbPutTop(rec.md,'정리·번역','> 정리·번역 모델: '+pm+'\n'+out)});
-      toast('정리·번역 완료');
+      /* 한국어 녹취는 「정리」(번역 없음), 그 밖은 「정리·번역」 — 다시 돌리면 다른 쪽 절은 지운다 */
+      const md=korean?tbPutTop(rec.md,'정리','> 정리 모델: '+pm+' · 한국어 녹취라 번역 없이 정리\n'+out)
+        :tbPutTop(rec.md.replace(/\n*##\s*정리\n[\s\S]*?(?=\n##\s|$)/,''),'정리·번역','> 정리·번역 모델: '+pm+'\n'+out);
+      upd(rec.id,{md});
+      toast(korean?'정리 완료':'정리·번역 완료');
     }catch(e){toast('⚠ 정리·번역 실패 — '+e.message);}
     setBusy('');
   };
   /* 음성 파일 → 새 기록 → 전사 */
-  const onFile=async f=>{
-    if(!f)return;const t=f.name.replace(/\.[^.]+$/,'');
-    const rec=newNote(t,'work','# '+t+'\n\n> 🎙 '+f.name+' · '+(f.size/1048576).toFixed(1)+'MB · '+new Date().toLocaleString('ko-KR')+'\n',['전사']);
+  const onFile=async(f,lng)=>{
+    if(!f)return;const t=f.name.replace(/\.[^.]+$/,'');lng=lng||lang;
+    const lname=(TB_LANGS.find(l=>l.id===lng)||{}).label||lng;
+    const rec={...newNote(t,'work','# '+t+'\n\n> 🎙 '+f.name+' · '+(f.size/1048576).toFixed(1)+'MB · '+lname+' · '+new Date().toLocaleString('ko-KR')+'\n',['전사']),lang:lng};
     local.current[rec.id]=f;
     if(f.size<=15*1024*1024){
       try{setBusy('녹음 올리는 중…');const r=await Files.put(f);rec.md+='\n[🎙 '+f.name+'](pms:'+r.path+')\n';}
       catch(e){console.warn('녹음 올리기 실패',e);}
     }else rec.md+='\n> 원본이 15MB를 넘어 저장하지 않았습니다 — 글로 옮긴 결과만 남습니다\n';
     addRec(rec);setSel(rec.id);setBusy('');
-    setTimeout(()=>runStt(rec),50);
+    setTimeout(()=>runStt(rec,lng),50);
   };
   const exportDocx=()=>{if(!cur)return;try{downloadBlob(mdToDocx(cur.md),safeName(cur.title)+'.docx');toast('Word 파일을 내려받았습니다');}catch(e){toast('⚠ 내보내기 실패 — '+e.message);}};
 
@@ -38223,7 +38271,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',padding:'8px 12px',borderBottom:'1px solid var(--border-default)'}}>
         <input id="tbTitle" value={cur.title} onChange={e=>upd(cur.id,{title:e.target.value})} aria-label="제목"
           style={{...inputStyle,border:'none',borderBottom:'1px dashed var(--border-strong)',borderRadius:0,fontWeight:700,fontSize:16,flex:'1 1 220px',minWidth:0,padding:'4px 2px'}}/>
-        <select style={sel_} value={lang} onChange={e=>{setLang(e.target.value);Store.saveCfg({sttLang:e.target.value});}} title="녹음에서 말하는 언어" aria-label="말하는 언어">
+        <select style={sel_} value={cur.lang||lang} onChange={e=>{setLang(e.target.value);Store.saveCfg({sttLang:e.target.value});upd(cur.id,{lang:e.target.value});}} title="녹음에서 말하는 언어" aria-label="말하는 언어">
           {TB_LANGS.map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
         <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>runTidy(cur)}
           title={'받아쓰기 '+tbSttName(Store.cfg.tbSttModel)+' · 정리 '+modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id)+' — '+(tbSection(cur.md,'녹취')?'받아쓴 글로 요점·한국어 번역·정리된 원문을 다시 만듭니다':'녹음을 처음부터 받아쓰고 이어서 요점·한국어 번역을 만듭니다. 결과는 맨 위에 붙습니다')}>✨ 정리하기</Button>
@@ -38241,8 +38289,15 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         :<div style={{padding:'12px 16px',overflowY:'auto',maxHeight:mobile?'none':'calc(100vh - 300px)'}}><Markdown md={shown}/></div>}
     </div>;
 
-  const upBtn=<><Button icon="🎙" disabled={!!busy} onClick={()=>document.getElementById('tbAudioIn').click()} title="녹음 파일을 올리면 받아쓰기 → 정리·번역까지 이어서 합니다">음성 파일 전사</Button>
-      <input id="tbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp,.ogg" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';onFile(f);}}/></>;
+  /* 파일을 고르기 전에 녹음 언어부터 고른다 — 고른 언어는 다음에도 기본으로 */
+  const pickLang=l=>{setLangOpen(false);upLang.current=l;setLang(l);Store.saveCfg({sttLang:l});document.getElementById('tbAudioIn').click();};
+  const upBtn=<><Button icon="🎙" disabled={!!busy} onClick={()=>setLangOpen(true)} title="녹음 언어를 고른 뒤 파일을 올리면 받아쓰기 → 정리까지 이어서 합니다">음성 파일 전사</Button>
+      <input id="tbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp,.ogg" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';onFile(f,upLang.current);}}/>
+      <Modal open={langOpen} onClose={()=>setLangOpen(false)} title="🎙 녹음에서 말하는 언어" width={380}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          {TB_LANGS.map(l=><Button key={l.id} variant={l.id===lang?'primary':'gray'} onClick={()=>pickLang(l.id)}>{l.id===lang?'✓ ':''}{l.label}</Button>)}</div>
+        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:10,lineHeight:1.6}}>고르면 바로 파일 선택 창이 열립니다. 한국어 녹음은 번역 없이 회의록용 정리본과 요점만 만듭니다.</div>
+      </Modal></>;
   return <Card title="📝 번역/정리" badge={<Badge tone="muted">{recs.length}개</Badge>}
     {...(mobile?{toolbarRight:upBtn}:{toolbar:upBtn})}>
     <div style={{display:'grid',gridTemplateColumns:mobile?'minmax(0,1fr)':'260px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:mobile?'auto':'calc(100vh - 240px)',background:'#fff'}}>
