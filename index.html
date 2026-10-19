@@ -36601,7 +36601,17 @@ function wavBlob(samples,rate){
   return new Blob([b],{type:'audio/wav'});
 }
 /* 음성 파일 → 16kHz 모노 WAV 조각들 */
-async function toWavSegments(blob,onStep){
+/* Alibaba 전사 서버는 WAV를 거절한다(format is empty) — 그쪽으로 보낼 조각은 MP3로 만든다 (lamejs, 필요할 때만 불러온다) */
+let LAME_P=null;
+const loadLame=()=>LAME_P||(LAME_P=new Promise((ok,no)=>{if(window.lamejs)return ok(window.lamejs);
+  const sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js';
+  sc.onload=()=>window.lamejs?ok(window.lamejs):no(new Error('MP3 변환 도구를 불러오지 못했습니다'));
+  sc.onerror=()=>{LAME_P=null;no(new Error('MP3 변환 도구를 불러오지 못했습니다 — 인터넷 연결을 확인하세요'));};document.head.appendChild(sc);}));
+async function mp3Blob(pcm,rate){const L=await loadLame();const enc=new L.Mp3Encoder(1,rate,48);
+  const i16=new Int16Array(pcm.length);for(let i=0;i<pcm.length;i++){const v=Math.max(-1,Math.min(1,pcm[i]));i16[i]=v<0?v*0x8000:v*0x7fff;}
+  const out=[];for(let i=0;i<i16.length;i+=1152){const b=enc.encodeBuffer(i16.subarray(i,i+1152));if(b.length)out.push(new Uint8Array(b));}
+  const e=enc.flush();if(e.length)out.push(new Uint8Array(e));return new Blob(out,{type:'audio/mpeg'});}
+async function toWavSegments(blob,onStep,mp3){
   const AC=window.AudioContext||window.webkitAudioContext;
   const ctx=new AC();
   let buf;
@@ -36622,7 +36632,7 @@ async function toWavSegments(blob,onStep){
     for(let c=0;c<ch;c++){const d=buf.getChannelData(c);for(let i=a;i<b;i++)out[i-a]+=d[i]/ch;}
     src.buffer=tmp;src.connect(off.destination);src.start();
     const rendered=await off.startRendering();
-    segs.push(wavBlob(rendered.getChannelData(0),RATE));
+    segs.push(mp3?await mp3Blob(rendered.getChannelData(0),RATE):wavBlob(rendered.getChannelData(0),RATE));
   }
   return segs;
 }
@@ -36638,7 +36648,7 @@ async function transcribeBlob(blob,opt={}){
   if(blob.size<=oneshot&&!conv)parts=[blob];
   else{
     onStep(conv&&blob.size<=ONESHOT_MAX?'형식을 바꾸는 중…':'긴 녹음을 자르는 중…');
-    try{parts=await toWavSegments(blob,onStep);}
+    try{parts=await toWavSegments(blob,onStep,alibaba);}
     catch(e){
       /* 이 브라우저가 그 코덱을 못 여는 경우 — Whisper가 직접 받는 형식이면 원본 그대로 보낸다 */
       if(!conv&&blob.size<=20*1024*1024){onStep('원본 그대로 보내는 중…');parts=[blob];}
@@ -36674,7 +36684,7 @@ function PmsAudio({src,label}){
     {u?<audio src={u} controls preload="none" style={{height:32,verticalAlign:'middle'}}/>:<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>불러오는 중…</span>}
   </span>;
 }
-Object.assign(window,{AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,mmss,blobB64,SEG_SEC});
+Object.assign(window,{mp3Blob,loadLame,AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,mmss,blobB64,SEG_SEC});
 </script>
 <script type="text/babel">/* ── 통역 (실시간) ────────────────────────────────────────────
    마이크 → 16kHz PCM 조각(0.1초) → WebSocket → Edge Function 'livetranslate'(키 보관) → Alibaba
@@ -37594,7 +37604,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.14';
+const TB_VERSION='v10.15';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
