@@ -36416,6 +36416,10 @@ const KeepAwake={
   },
   off(){if(this.el){try{this.el.pause();this.el.remove();}catch(_){}}this.el=null;},
   get running(){return !!(this.el&&!this.el.paused);},
+  /* 여러 작업(통역 세션, 전사·정리)이 같이 쓸 수 있게 — 하나라도 잡고 있으면 켜 두고, 다 놓으면 끈다 */
+  holders:new Set(),
+  hold(k){this.holders.add(k);return this.on();},
+  release(k){this.holders.delete(k);if(!this.holders.size)this.off();},
 };
 Object.assign(window,{KeepAwake,useMobile,BackBar,Markdown,renderInline,inputStyle});
 </script>
@@ -36844,7 +36848,7 @@ class LiveSession{
     this.running=true;this.t0=Date.now();this.err='';this.note='';LiveSession.all.add(this);
     if(this.opt.record!==false)this.startRec();
     try{if(navigator.wakeLock)this.lock=await navigator.wakeLock.request('screen');}catch(_){}
-    try{KeepAwake.on();}catch(_){}
+    try{KeepAwake.hold(this);}catch(_){}
     await this.connect();
     this.rot=setInterval(()=>this.rotate(),LIVE_ROTATE_MS);
   }
@@ -36980,7 +36984,7 @@ class LiveSession{
     try{this.stream&&this.stream.getTracks().forEach(t=>t.stop());}catch(_){}
     try{this.ctx&&this.ctx.close();}catch(_){}
     try{this.lock&&this.lock.release();}catch(_){}
-    try{KeepAwake.off();}catch(_){}
+    try{KeepAwake.release(this);}catch(_){}
     for(const c of this.conns)if(!c.gone){if(hard)c.close();else c.finish();}
     this.level=0;this.bump();
   }
@@ -37726,7 +37730,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.20';
+const TB_VERSION='v10.21';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38242,7 +38246,9 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   /* 받아쓰기 → 정리·번역 */
   const runStt=async(rec0,lng)=>{
     if(TB_JOBS.has(rec0.id))return;TB_JOBS.add(rec0.id);
-    try{await runSttInner(rec0,lng||rec0.lang||lang);}finally{TB_JOBS.delete(rec0.id);}
+    /* 전사가 몇 분 걸리므로 폰이 다른 앱으로 가도 탭이 얼지 않게 — 단추 클릭에서 시작되니 재생이 허용된다 */
+    try{KeepAwake.hold('job:'+rec0.id);}catch(_){}
+    try{await runSttInner(rec0,lng||rec0.lang||lang);}finally{TB_JOBS.delete(rec0.id);try{KeepAwake.release('job:'+rec0.id);}catch(_){}}
   };
   const runSttInner=async(rec0,lng)=>{
     let rec=rec0;const refs=audioRefs(rec.md);const file=local.current[rec.id];
@@ -38273,7 +38279,8 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   };
   const runPolish=async(rec)=>{
     const mine=!TB_JOBS.has(rec.id);if(mine)TB_JOBS.add(rec.id);
-    try{await runPolishInner(rec);}finally{if(mine)TB_JOBS.delete(rec.id);}
+    if(mine)try{KeepAwake.hold('job:'+rec.id);}catch(_){}
+    try{await runPolishInner(rec);}finally{if(mine){TB_JOBS.delete(rec.id);try{KeepAwake.release('job:'+rec.id);}catch(_){}}}
   };
   const runPolishInner=async(rec)=>{
     const raw=(tbSection(rec.md,'녹취')||tbSection(rec.md,'실시간 원문')).replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
