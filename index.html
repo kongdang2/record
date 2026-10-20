@@ -37756,7 +37756,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.22';
+const TB_VERSION='v10.23';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -37837,8 +37837,8 @@ const monthStart=(off=0)=>{const d=new Date();return new Date(d.getFullYear(),d.
 
 /* ── 모델 고르기 ── */
 const TB_STT=[
-  {id:'qwen-audio-3.1-asr-flash',label:'Alibaba Qwen-Audio 3.1 — 최신 · 중국어에 강함'},
-  {id:'qwen3-asr-flash',label:'Alibaba Qwen3-ASR — 중국어에 강함 · 저렴'},
+  {id:'qwen3-asr-flash',label:'Alibaba Qwen3-ASR — 받아쓰기 전용 · 되풀이 적음 (권장)'},
+  {id:'qwen-audio-3.1-asr-flash',label:'Alibaba Qwen-Audio 3.1 — 최신이지만 조용한 구간에서 같은 말 되풀이가 잦음'},
   {id:'gpt-transcribe',label:'OpenAI gpt-transcribe — 영어·한국어에 강함'},
   {id:'whisper-1',label:'OpenAI whisper-1 — 예전 표준'},
 ];
@@ -37851,7 +37851,7 @@ function tbApplyStt(){
 
 /* 관리자가 정한 값 → 이 창의 설정 */
 const TB_CFG_KEYS=['liveAsrModel','liveTrModel','liveModel','tbSttModel','claudeModel','liveSil','sttHint'];
-/* 실시간 받아쓰기·동시통역은 늘 최신 모델 하나만 쓴다(새 버전이 나오면 관리자가 교체) */
+/* 실시간 받아쓰기·동시통역의 기본값 — 관리자가 설정 › 모델에서 바꿀 수 있다 */
 const TB_FIXED={liveAsrModel:'qwen-audio-3.1-asr-flash-streaming',liveModel:'qwen3.8-livetranslate-flash-realtime'};
 function tbApplyConfig(d){
   window.TB_CFG=d||{};
@@ -37863,6 +37863,9 @@ function tbApplyConfig(d){
 const tbSttName=id=>{id=id||'qwen3-asr-flash';return /^(gpt|whisper)/.test(id)?'OpenAI '+id:'Alibaba '+modelName(id);};
 const tbExtra=k=>(((window.TB_CFG||{}).extra||{})[k])||[];
 const tbClaudeOpts=()=>[...CLAUDE_MODELS,...tbExtra('claude').map(m=>({id:m.id,label:(m.label||m.id)+' · 새 모델'}))];
+/* 실시간 모델 선택지 = 기본 목록 + 「최신으로 교체」로 들어온 모델 */
+const tbLiveOpts=(base,kind)=>{const c=window.TB_CFG||{};const cur=kind==='asr'?c.liveAsrModel:c.liveModel;
+  return cur&&!base.some(o=>o.id===cur)?[...base,{id:cur,label:tbModelName(cur)+' · 새 모델'}]:base;};
 const tbTrOpts=()=>[...LIVE_TR_MODELS,...tbExtra('claude').map(m=>({id:m.id,label:'번역 '+(m.label||m.id)+' (새 모델)'}))];
 const tbSttOpts=()=>[...TB_STT,...tbExtra('stt').map(m=>({id:m.id,label:(m.label||m.id)+' · 새 모델'}))];
 const tbModelName=id=>((/^qwen-audio-([\d.]+)-asr/.exec(id)||[])[1]?'Qwen-Audio '+/^qwen-audio-([\d.]+)/.exec(id)[1]+' 받아쓰기'
@@ -38431,13 +38434,14 @@ function TbModels({toast,role,cfg,setCfg,newModels,setNewModels}){
   const {Card,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const owner=role==='owner';
   const live=LIVE.sess&&LIVE.sess.running;
-  const cur=()=>({tr:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,stt:Store.cfg.tbSttModel||'qwen3-asr-flash',
+  const cur=()=>({asr:Store.cfg.liveAsrModel||TB_FIXED.liveAsrModel,live:Store.cfg.liveModel||TB_FIXED.liveModel,
+    tr:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,stt:Store.cfg.tbSttModel||'qwen3-asr-flash',
     polish:Store.cfg.claudeModel||CLAUDE_MODELS[0].id,sil:String(Store.cfg.liveSil||'')});
   const [m,setM]=React.useState(cur);const [busy,setBusy]=React.useState(false);const [err,setErr]=React.useState('');const [checkErr,setCheckErr]=React.useState(null);
   const set=p=>setM(o=>({...o,...p}));
   const writeCfg=async patch=>{const next={...(window.TB_CFG||cfg||{}),...patch};await TB.setConfig(next);tbApplyConfig(next);setCfg(next);return next;};
   const save=async()=>{setBusy(true);setErr('');
-    try{await writeCfg({liveTrModel:m.tr,tbSttModel:m.stt,claudeModel:m.polish,liveSil:m.sil?Number(m.sil):0});
+    try{await writeCfg({liveAsrModel:m.asr,liveModel:m.live,liveTrModel:m.tr,tbSttModel:m.stt,claudeModel:m.polish,liveSil:m.sil?Number(m.sil):0});
       toast('팀 모델 설정을 저장했습니다'+(live?' — 지금 통역은 다음 시작부터 적용':''));}
     catch(e){setErr(e.message);}
     setBusy(false);};
@@ -38449,8 +38453,8 @@ function TbModels({toast,role,cfg,setCfg,newModels,setNewModels}){
   /* 새 모델 처리 — Claude·전사는 선택지에 추가, 실시간 모델은 최신으로 교체 */
   const accept=async n=>{setBusy(true);setErr('');
     try{const c=window.TB_CFG||cfg||{};const seen=[...(c.seen||[]),n.id];
-      if(n.kind==='live')await writeCfg({liveModel:n.id,seen});
-      else if(n.kind==='asr')await writeCfg({liveAsrModel:n.id,seen});
+      if(n.kind==='live'){await writeCfg({liveModel:n.id,seen});set({live:n.id});}
+      else if(n.kind==='asr'){await writeCfg({liveAsrModel:n.id,seen});set({asr:n.id});}
       else{const ex={...(c.extra||{})};ex[n.kind]=[...(ex[n.kind]||[]),{id:n.id,label:n.label}];await writeCfg({extra:ex,seen});}
       setNewModels(l=>(l||[]).filter(x=>x.id!==n.id));
       toast(n.kind==='live'||n.kind==='asr'?n.label+'(으)로 교체했습니다':n.label+'을(를) 선택지에 추가했습니다');}
@@ -38459,10 +38463,6 @@ function TbModels({toast,role,cfg,setCfg,newModels,setNewModels}){
   const ignore=async n=>{try{await writeCfg({seen:[...((window.TB_CFG||cfg||{}).seen||[]),n.id]});setNewModels(l=>(l||[]).filter(x=>x.id!==n.id));}catch(e){setErr(e.message);}};
   const per=id=>{const p=TB_PRICE_SEC[id];if(p)return '시간당 약 '+fmtUsd(p*3600);const t=TB_PRICE_TOK[id];return t?'입력 $'+t[0]+' · 출력 $'+t[1]+' /100만 토큰':'단가 미등록';};
   const lab=(opts,id)=>((opts.find(o=>o.id===id)||{}).label||id||'—');
-  const fixedRow=(label,id,desc)=><div style={{display:'grid',gap:4}}>
-    <span style={{fontSize:'var(--fs-sm2)',fontWeight:600}}>{label}</span>
-    <div style={{fontSize:'var(--fs-md)'}}>{tbModelName(id)} <Badge tone="muted">최신 고정</Badge></div>
-    <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{desc} · {per(id)}</span></div>;
   const row=(label,key,options,desc)=><div style={{display:'grid',gap:4}}>
     <label htmlFor={'tbm_'+key} style={{fontSize:'var(--fs-sm2)',fontWeight:600}}>{label}</label>
     {owner?<TbSelect id={'tbm_'+key} value={m[key]} options={options} onChange={v=>set({[key]:v})}/>
@@ -38480,10 +38480,10 @@ function TbModels({toast,role,cfg,setCfg,newModels,setNewModels}){
         <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:4}}>새 모델은 예상 요금 단가가 등록되지 않아 요금 계산에서 빠집니다. 교체 전 짧게 시험해 보세요.</div>
       </div>}
       {checkErr&&<InfoBar tone="warn">일부 회사의 목록을 읽지 못했습니다 — {Object.entries(checkErr).map(([k,v])=>k+': '+v).join(' · ')}</InfoBar>}
-      {fixedRow('통역 🎯 정확도 우선 — 받아쓰기',Store.cfg.liveAsrModel||TB_FIXED.liveAsrModel,'말을 글로 받아 적는 모델')}
+      {row('통역 🎯 정확도 우선 — 받아쓰기','asr',tbLiveOpts(LIVE_ASR_MODELS,'asr'),'말을 글로 받아 적는 모델')}
       {row('통역 🎯 정확도 우선 — 번역','tr',tbTrOpts(),'받아쓴 문장을 한국어로 옮기는 Claude. 빠를수록 자막이 일찍 뜸')}
       {row('통역 — 문장 끊는 간격','sil',TB_SIL,'말이 이만큼 멈추면 문장이 끝난 것으로 보고 번역을 시작 (속도 우선 Qwen3.8은 모델이 알아서 끊음)')}
-      {fixedRow('통역 ⚡ 속도 우선',Store.cfg.liveModel||TB_FIXED.liveModel,'받아쓰기와 번역을 한 번에 하는 동시통역 모델')}
+      {row('통역 ⚡ 속도 우선','live',tbLiveOpts(LIVE_MODELS,'live'),'받아쓰기와 번역을 한 번에 하는 동시통역 모델')}
       {row('녹음 파일 전사','stt',tbSttOpts(),'OpenAI는 무료 사용량이 없어 바로 청구됩니다')}
       {row('정리·번역','polish',tbClaudeOpts(),'전사 글을 다듬고 한국어로 정리하는 Claude')}
       {err&&<InfoBar tone="warn">{err}</InfoBar>}
