@@ -36669,7 +36669,7 @@ function deLoop(t){
 /* 문장 묶음이 통째로 되풀이되는 것(한 조각 안에서 같은 2~3문장이 수십 번) — 문장 단위로 잘라 1~12문장 주기를 찾아 한 번만 남긴다.
    긴 문장(8자 넘음)은 두 번 연속이면, 짧은 문장은 세 번 넘게 연속일 때만 지운다(「对，对。」 같은 맞장구는 살린다) */
 function dedupeCycles(s){
-  const U=String(s||'').match(/[^。！？!?\n]+[。！？!?\n]*|[。！？!?\n]+/g)||[];
+  const U=String(s||'').match(/(?:[^。！？!?.\n]|\.(?!\s|$))+(?:[。！？!?\n]|\.(?=\s|$))*\s*|[。！？!?.\n]+\s*/g)||[];   /* 한국어·영어의 「. 」도 문장 끝으로 본다(1.5 같은 숫자는 제외) */
   const key=u=>u.replace(/[\s，,、。．.！!？?…~'"“”]/g,'');
   const K=U.map(key);const out=[];let i=0;
   while(i<U.length){
@@ -37795,7 +37795,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.25';
+const TB_VERSION='v10.26';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
