@@ -36641,7 +36641,7 @@ async function toWavSegments(blob,onStep,mp3){
     const pcm=rendered.getChannelData(0);
     const seg=mp3?await mp3Blob(pcm,RATE):wavBlob(pcm,RATE);
     /* 거의 무음인 조각 표시 — LLM 방식 전사기는 무음·잡음만 들으면 「这个，这个…」「嗯，嗯…」을 지어내므로 보내지 않는다 */
-    seg.silent=isSilentPcm(pcm);
+    seg.silent=isSilentPcm(pcm);seg.t0=from;seg.t1=from+len;   /* 녹음 안의 시각(초) — 조각별 정리에 「0:00–2:30」으로 붙는다 */
     segs.push(seg);
   }
   return segs;
@@ -36711,7 +36711,8 @@ async function transcribeBlob(blob,opt={}){
   const texts=new Array(parts.length).fill('');let done=0;
   const tick=()=>onStep('전사 중 '+Math.min(done+1,parts.length)+'/'+parts.length+(parts.length>1?' 조각':''));
   const one=async i=>{
-    if(parts[i].silent){texts[i]='';done++;return;}   /* 무음 조각은 보내지 않는다 */
+    const fin=t=>{texts[i]=t;done++;opt.onPart&&opt.onPart(i,t,parts[i].t0,parts[i].t1,parts.length);};
+    if(parts[i].silent){fin('');return;}   /* 무음 조각은 보내지 않는다 */
     let t;
     if(alibaba){
       /* 앞 조각의 끝 문장을 힌트로 넘기지 않는다 — Qwen은 힌트를 그대로 받아쓰기에 베껴 넣어서(한 조각이 망가지면 다음 조각도 망가진다)
@@ -36733,7 +36734,7 @@ async function transcribeBlob(blob,opt={}){
     /* 되풀이 환각: 걷어 낸 뒤 남는 게 거의 없으면 그 조각은 잡음으로 본다 */
     const ratio=loopRatio(t);t=deLoop(t);
     if(ratio>0.6&&t.length<40)t='';
-    texts[i]=t;done++;tick();
+    fin(t);tick();
   };
   tick();
   if(alibaba){
@@ -37142,7 +37143,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
       {recent.map(n=><div key={n.id} onClick={()=>onOpenNote(n.id,false)} role="button"
         style={{padding:'7px 4px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',fontSize:'var(--fs-sm2)'}}>
         <div style={{fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{n.title}</div>
-        <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)'}}>{/정리·번역/.test(n.md)?'✓ 정리됨':audioRefs(n.md).length?'🎙 녹음 있음 · 정리 전':'자막만'}</div>
+        <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)'}}>{/##(?!#)\s*정리(·번역)?\s*(\n|$)/.test(n.md)?'✓ 정리됨':audioRefs(n.md).length?'🎙 녹음 있음 · 정리 전':'자막만'}</div>
       </div>)}
     </Card>
   </div>;
@@ -37594,46 +37595,6 @@ async function transcriptFixes(raw,hint){
 /* 한글 비율로 한국어 녹취인지 가린다 — 한국어면 번역 없이 회의록용 정리본만 만든다 */
 const tbIsKorean=t=>{const s=String(t||'');const ko=(s.match(/[가-힣]/g)||[]).length;
   const other=(s.match(/[\u4e00-\u9fff\u3040-\u30ffA-Za-z]/g)||[]).length;return ko>=20&&ko>=(ko+other)*0.6;};
-async function polishTranscript(raw,opt={}){
-  const hint=opt.hint?('\n자주 나오는 고유명사: '+opt.hint):'';
-  if(opt.korean)return polishKorean(raw,opt,hint);
-  opt.onStep&&opt.onStep('분야와 오인식 낱말 파악 중…');
-  let fx={topic:'',fixes:[]};
-  try{fx=await transcriptFixes(raw,opt.hint);}catch(_){}
-  const ctx=(fx.topic?('\n이 녹취의 분야·주제: '+fx.topic):'')
-    +(fx.fixes.length?('\n기계가 잘못 받아쓴 낱말(반드시 바로잡을 것): '
-      +fx.fixes.map(f=>f.wrong+' → '+f.right).join(' · ')):'');
-  const parts=splitChunks(raw,POLISH_CHUNK);
-  const zh=[],ko=[];
-  for(let i=0;i<parts.length;i++){
-    opt.onStep&&opt.onStep('정리·번역 '+(i+1)+'/'+parts.length);
-    const r=await askClaude(
-      '아래는 회의 녹음을 기계가 받아쓴 글의 일부다('+(i+1)+'/'+parts.length+').'+hint+ctx
-      +'\n\n[원문] 절: 위 교정표와 분야 지식에 따라 **잘못 받아쓴 전문용어·고유명사를 적극적으로 바로잡고**,'
-      +' 군더더기(음, 어, 그래서 이제)와 같은 말 반복을 지운다.'
-      +' 말한 순서와 사실관계·수치는 바꾸지 않고, 없는 내용을 지어내지 않는다. 주제가 바뀌는 곳에서 문단을 나눈다.'
-      +'\n[번역] 절: 위 [원문]을 업무 문서에 쓸 수 있는 자연스러운 한국어로 옮긴다. 교정표를 반영한 낱말로 옮긴다.'
-      +' 중국어 인명·지명·회사명은 한자(한글음)로 함께 적는다. 정해진 것·할 일은 문단 끝에 「→ 」로 적는다.'
-      +'\n확실하지 않은 부분은 (?)로 표시한다. 앞뒤가 잘린 조각이므로 요약하거나 결론을 덧붙이지 않는다.'
-      +'\n\n다른 말 없이 아래 형식으로만 출력한다.\n===원문===\n(정리된 원문)\n===번역===\n(한국어 번역)'
-      +'\n\n--- 받아쓴 글 ---\n'+parts[i],
-      {max_tokens:8000});
-    /* 원문+번역을 한 답에 받으므로 길면 번역 절 앞에서 잘릴 수 있다 — 그러면 번역만 따로 다시 받는다(원문·「===」 표시가 번역 자리에 섞이지 않게) */
-    const a=grabSec(r,'원문')||(/===\s*원문/.test(r)?'':r.trim());
-    let b=/===\s*번역\s*===/.test(r)?grabSec(r,'번역'):'';
-    if(!b){opt.onStep&&opt.onStep('번역 다시 받는 중 '+(i+1)+'/'+parts.length);
-      try{b=(await askClaude('아래 회의 녹취 조각을 업무 문서에 쓸 수 있는 자연스러운 한국어로 옮겨라.'+hint+ctx
-        +' 교정표를 반영한 낱말로 옮기고, 중국어 인명·지명·회사명은 한자(한글음)로 함께 적는다. 이미 한국어인 문장은 다듬기만 한다.'
-        +' 정해진 것·할 일은 문단 끝에 「→ 」로 적는다. 확실하지 않은 부분은 (?)로 표시한다. 요약하지 말고, 번역문만 출력한다.'
-        +'\n\n--- 조각 ---\n'+(a||parts[i]),{max_tokens:6000})||'').trim();}catch(_){b='';}}
-    zh.push(a||parts[i]);ko.push(b||'(이 부분 번역 실패 — 아래 「정리된 원문」 참고)');
-  }
-  const korean=ko.join('\n\n');
-  const mm=await meetingMinutes(korean,{topic:fx.topic,onStep:opt.onStep});
-  return minutesMd(fx,mm)
-    +'\n\n### 한국어 번역 (전문)\n'+korean
-    +'\n\n### 정리된 원문\n'+zh.join('\n\n');
-}
 /* ── 회의록 모양으로 가공 ──────────────────────────────────────
    번역(또는 한국어 정리본)은 아직 「말한 순서대로의 글」이다. 회의록은 주제별로 다시 묶어야 한다:
    개요(3~5줄) → 주제별 헤드라인 → 개조식 항목(같은 말 반복은 하나로).
@@ -37684,36 +37645,113 @@ function minutesMd(fx,mm){
     +'### 개요\n'+((mm.overview||'').trim()||'(개요를 만들지 못했습니다)')
     +'\n\n### 주제별 정리\n'+((mm.themed||'').trim()||'(주제별 정리를 만들지 못했습니다)');
 }
-/* 한국어 녹취 → 번역 없이 다듬고, 회의록(개요 → 주제별 개조식)으로 묶는다 */
-async function polishKorean(raw,opt,hint){
-  opt.onStep&&opt.onStep('분야와 오인식 낱말 파악 중…');
+/* ── 조각별 다듬기·번역 ──────────────────────────────────────────
+   받아쓰기 조각(2분 30초)이 나오는 대로 바로 다듬고 번역해 「시각 · 번역 / 원문」 짝으로 쌓는다.
+   번역 맥락은 앞 조각 번역의 끝부분으로 잇고, 오인식 교정표는 앞부분이 어느 정도 모이면 한 번 만든다.
+   모든 조각이 끝나면 번역(또는 한국어 정리본)을 모아 회의록(개요 → 주제별 개조식)으로 묶는다. */
+const SEG_FIX_SAMPLE=2500;   /* 교정표를 만들기 전에 모아 둘 글자 수 */
+/* 받아쓰기 조각을 차례로 넘겨받는 줄 — 받아쓰기(넣는 쪽)와 정리(꺼내는 쪽)가 동시에 돈다 */
+class TbSegQueue{
+  constructor(){this.items=[];this.ended=false;this.wake=null;}
+  push(x){this.items.push(x);this._w();}
+  end(){this.ended=true;this._w();}
+  _w(){const w=this.wake;this.wake=null;w&&w();}
+  _wait(){return new Promise(r=>{this.wake=r;});}
+  async next(){while(!this.items.length&&!this.ended)await this._wait();return this.items.length?this.items.shift():null;}
+  /* 모인 글이 n자가 되거나 끝날 때까지 기다렸다가, 지금까지 모인 글을 돌려준다(꺼내지는 않음) */
+  async sample(n){while(!this.ended&&this.items.reduce((a,x)=>a+x.text.length,0)<n)await this._wait();return this.items.map(x=>x.text).join('\n\n');}
+}
+/* 녹취 글 → 조각 목록. 「#### 0:00–2:30」 머리가 있으면 그 단위로, 없으면(예전 기록·실시간 원문) 1,800자씩.
+   「### 파일이름」은 여러 파일을 한 기록에 받아쓴 경우의 파일 구분 */
+function parseSegs(raw){
+  const lines=String(raw||'').split('\n');const segs=[];let file='',cur=null;
+  const flush=()=>{if(cur&&cur.text.trim())segs.push({label:cur.label,text:cur.text.trim()});cur=null;};
+  for(const l of lines){let m;
+    if((m=/^###\s+(.*)/.exec(l))&&!/^####/.test(l)){flush();file=m[1].trim();continue;}
+    if((m=/^####\s+(.*)/.exec(l))){flush();cur={label:(file?file+' · ':'')+m[1].trim(),text:''};continue;}
+    if(!cur)cur={label:file,text:''};
+    cur.text+=l+'\n';}
+  flush();
+  /* 머리 없이 긴 글이나 너무 긴 조각은 1,800자씩 다시 나눈다(첫 토막만 머리를 단다) */
+  const out=[];
+  segs.forEach(s=>{const parts=s.text.length>POLISH_CHUNK*1.5?splitChunks(s.text,POLISH_CHUNK):[s.text];
+    parts.forEach((t,i)=>out.push({label:i?(s.label?s.label+' (이어서)':''):s.label,text:t}));});
+  return out;
+}
+/* 외국어 조각 하나 → {orig: 다듬은 원문, ko: 한국어 번역} */
+async function polishSegZh(text,{hint,ctx,prev,onStep}){
+  const pv=prev?('\n앞 조각 번역의 끝부분(맥락 참고용 — 다시 옮기지 말 것): '+prev):'';
+  const r=await askClaude(
+    '아래는 회의 녹음을 기계가 받아쓴 글의 한 조각(약 2분 30초)이다.'+hint+ctx+pv
+    +'\n\n[원문] 절: 위 교정표와 분야 지식에 따라 **잘못 받아쓴 전문용어·고유명사를 적극적으로 바로잡고**,'
+    +' 군더더기(음, 어, 그래서 이제)와 같은 말 반복을 지운다.'
+    +' 말한 순서와 사실관계·수치는 바꾸지 않고, 없는 내용을 지어내지 않는다. 주제가 바뀌는 곳에서 문단을 나눈다.'
+    +'\n[번역] 절: 위 [원문]을 업무 문서에 쓸 수 있는 자연스러운 한국어로 옮긴다. 교정표를 반영한 낱말로 옮긴다.'
+    +' 중국어 인명·지명·회사명은 한자(한글음)로 함께 적는다. 이미 한국어인 문장(통역사의 말 등)은 다듬기만 한다. 정해진 것·할 일은 문단 끝에 「→ 」로 적는다.'
+    +'\n확실하지 않은 부분은 (?)로 표시한다. 앞뒤가 잘린 조각이므로 요약하거나 결론을 덧붙이지 않는다.'
+    +'\n\n다른 말 없이 아래 형식으로만 출력한다.\n===원문===\n(정리된 원문)\n===번역===\n(한국어 번역)'
+    +'\n\n--- 받아쓴 글 ---\n'+text,
+    {max_tokens:8000});
+  /* 원문+번역을 한 답에 받으므로 길면 번역 절 앞에서 잘릴 수 있다 — 그러면 번역만 따로 다시 받는다(원문·「===」 표시가 번역 자리에 섞이지 않게) */
+  const a=grabSec(r,'원문')||(/===\s*원문/.test(r)?'':(r||'').trim());
+  let b=/===\s*번역\s*===/.test(r)?grabSec(r,'번역'):'';
+  if(!b){onStep&&onStep('번역 다시 받는 중…');
+    try{b=(await askClaude('아래 회의 녹취 조각을 업무 문서에 쓸 수 있는 자연스러운 한국어로 옮겨라.'+hint+ctx+pv
+      +' 교정표를 반영한 낱말로 옮기고, 중국어 인명·지명·회사명은 한자(한글음)로 함께 적는다. 이미 한국어인 문장은 다듬기만 한다.'
+      +' 정해진 것·할 일은 문단 끝에 「→ 」로 적는다. 확실하지 않은 부분은 (?)로 표시한다. 요약하지 말고, 번역문만 출력한다.'
+      +'\n\n--- 조각 ---\n'+(a||text),{max_tokens:6000})||'').trim();}catch(_){b='';}}
+  return {orig:a||text,ko:b||'(이 부분 번역 실패 — 아래 원문 참고)'};
+}
+/* 한국어 조각 하나 → {orig: 받아쓴 글, ko: 회의록용으로 다듬은 글} */
+async function polishSegKo(text,{hint,ctx,prev}){
+  const pv=prev?('\n앞 조각 끝부분(맥락 참고용 — 다시 쓰지 말 것): '+prev):'';
+  const r=await askClaude(
+    '아래는 한국어 회의 녹음을 기계가 받아쓴 글의 한 조각(약 2분 30초)이다.'+hint+ctx+pv
+    +'\n\n회의록에 바로 옮겨 쓸 수 있게 다듬는다. 교정표와 분야 지식에 따라 **잘못 받아쓴 전문용어·고유명사를 적극적으로 바로잡고**,'
+    +' 군더더기(음, 어, 그래서 이제)와 같은 말 반복을 지우고, 끊긴 말은 자연스러운 문장으로 잇는다.'
+    +' 말한 순서와 사실관계·수치는 바꾸지 않고, 없는 내용을 지어내지 않는다. 주제가 바뀌는 곳에서 문단을 나눈다.'
+    +' 정해진 것·할 일은 문단 끝에 「→ 」로 적는다. 확실하지 않은 부분은 (?)로 표시한다.'
+    +' 앞뒤가 잘린 조각이므로 요약하거나 결론을 덧붙이지 않는다.'
+    +'\n\n다른 말 없이 다듬은 글만 출력한다.'
+    +'\n\n--- 받아쓴 글 ---\n'+text,
+    {max_tokens:6000});
+  return {orig:text,ko:(r||'').trim()||text};
+}
+/* 조각을 차례로 다듬고·번역하고, 끝나면 회의록으로 묶는다.
+   src: 조각 배열 또는 TbSegQueue(받아쓰기와 동시에 돌 때). opt.onProgress({korean,fx,segs})로 중간 결과를 알린다 */
+async function polishStream(src,opt={}){
+  const q=Array.isArray(src)?(()=>{const x=new TbSegQueue();src.forEach(s=>x.push(s));x.end();return x;})():src;
+  const hint=opt.hint?('\n자주 나오는 고유명사: '+opt.hint):'';
+  opt.onStep&&opt.onStep('앞부분 받아쓰기를 기다리는 중…');
+  const sample=await q.sample(SEG_FIX_SAMPLE);
+  const korean=typeof opt.korean==='boolean'?opt.korean:tbIsKorean(sample);
   let fx={topic:'',fixes:[]};
-  try{fx=await transcriptFixes(raw,opt.hint);}catch(_){}
+  if(sample.trim()){opt.onStep&&opt.onStep('분야와 오인식 낱말 파악 중…');try{fx=await transcriptFixes(sample,opt.hint);}catch(_){}}
   const ctx=(fx.topic?('\n이 녹취의 분야·주제: '+fx.topic):'')
     +(fx.fixes.length?('\n기계가 잘못 받아쓴 낱말(반드시 바로잡을 것): '
       +fx.fixes.map(f=>f.wrong+' → '+f.right).join(' · ')):'');
-  const parts=splitChunks(raw,POLISH_CHUNK);
-  const out=[];
-  for(let i=0;i<parts.length;i++){
-    opt.onStep&&opt.onStep('정리 '+(i+1)+'/'+parts.length);
-    const r=await askClaude(
-      '아래는 한국어 회의 녹음을 기계가 받아쓴 글의 일부다('+(i+1)+'/'+parts.length+').'+hint+ctx
-      +'\n\n회의록에 바로 옮겨 쓸 수 있게 다듬는다. 교정표와 분야 지식에 따라 **잘못 받아쓴 전문용어·고유명사를 적극적으로 바로잡고**,'
-      +' 군더더기(음, 어, 그래서 이제)와 같은 말 반복을 지우고, 끊긴 말은 자연스러운 문장으로 잇는다.'
-      +' 말한 순서와 사실관계·수치는 바꾸지 않고, 없는 내용을 지어내지 않는다. 주제가 바뀌는 곳에서 문단을 나눈다.'
-      +' 정해진 것·할 일은 문단 끝에 「→ 」로 적는다. 확실하지 않은 부분은 (?)로 표시한다.'
-      +' 앞뒤가 잘린 조각이므로 요약하거나 결론을 덧붙이지 않는다.'
-      +'\n\n다른 말 없이 다듬은 글만 출력한다.'
-      +'\n\n--- 받아쓴 글 ---\n'+parts[i],
-      {max_tokens:6000});
-    out.push((r||'').trim()||parts[i]);
+  const segs=[];let prev='';
+  for(let s;(s=await q.next());){
+    opt.onStep&&opt.onStep((korean?'정리 ':'정리·번역 ')+(segs.length+1)+'번째 조각'+(s.label?' ('+s.label+')':''));
+    const r=korean?await polishSegKo(s.text,{hint,ctx,prev}):await polishSegZh(s.text,{hint,ctx,prev,onStep:opt.onStep});
+    segs.push({label:s.label,orig:r.orig,ko:r.ko});prev=r.ko.slice(-300);
+    opt.onProgress&&opt.onProgress({korean,fx,segs:segs.slice()});
   }
-  const body=out.join('\n\n');
-  const mm=await meetingMinutes(body,{topic:fx.topic,onStep:opt.onStep});
-  return minutesMd(fx,mm)
-    +'\n\n### 정리본 (전문)\n'+body;
+  if(!segs.length)throw new Error('정리할 글이 없습니다');
+  const mm=await meetingMinutes(segs.map(s=>s.ko).join('\n\n'),{topic:fx.topic,onStep:opt.onStep});
+  const res={korean,fx,segs,mm};res.md=segsMd(res);return res;
 }
-Object.assign(window,{polishTranscript,polishKorean,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
+/* 정리 절 본문: (회의록 머리) + 조각별 「시각 · 번역 / 원문(인용)」 */
+function segsMd({korean,fx,segs,mm,progress}){
+  const head=mm?minutesMd(fx,mm):(progress||'> ⏳ 조각별로 정리하는 중 — 다 끝나면 개요·주제별 정리가 여기 붙습니다');
+  const quote=t=>String(t||'').split('\n').map(l=>'> '+l).join('\n');
+  const pairs=(segs||[]).map(s=>(s.label?'#### '+s.label+'\n':'')+(korean?s.ko:(s.ko+'\n\n'+quote(s.orig)))).join('\n\n');
+  return head+'\n\n### '+(korean?'정리본 (조각별)':'번역 · 원문 (조각별)')+'\n'+pairs;
+}
+/* 예전 이름 그대로 쓰는 곳(일정관리 앱 등)을 위해 남겨 둔다 — 결과는 정리 절 본문(마크다운) */
+async function polishTranscript(raw,opt={}){return (await polishStream(parseSegs(raw),opt)).md;}
+async function polishKorean(raw,opt={}){return polishTranscript(raw,{...opt,korean:true});}
+Object.assign(window,{polishTranscript,polishKorean,polishStream,polishSegZh,polishSegKo,parseSegs,segsMd,TbSegQueue,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
 </script>
 <script type="text/babel">/* ── ZIP 만들기 (Word 파일 저장에 쓴다) ─────────────────────
    외부 라이브러리 없이 직접 구현했다. 압축 없이 저장(store)한다 */
@@ -37757,7 +37795,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.24';
+const TB_VERSION='v10.25';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -37826,13 +37864,13 @@ function newNote(title,scope,md,tags){
 /* 절 넣기 — 맨 위(제목·머리 줄 아래, 첫 ## 절 앞). 같은 이름의 절은 갈아끼운다 */
 function tbPutTop(md,head,body){
   const esc=head.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  const re=new RegExp('\\n*##\\s*'+esc+'[^\\n]*\\n[\\s\\S]*?(?=\\n##\\s|$)','g');
+  const re=new RegExp('(?:^|\\n+)##(?!#)\\s*'+esc+'[^\\n]*\\n[\\s\\S]*?(?=\\n##\\s|$)','g');   /* 줄 머리의 「## 」만 — 「### 정리본」 속 「## 정리본」에 걸리지 않게 */
   const cleaned=String(md||'').replace(re,'').replace(/\s+$/,'');
   const sec='## '+head+'\n'+String(body).trim()+'\n';
   const m=/(^|\n)##\s/.exec(cleaned);
   return m?cleaned.slice(0,m.index).replace(/\s+$/,'')+'\n\n'+sec+'\n'+cleaned.slice(m.index).replace(/^\n+/,''):cleaned+'\n\n'+sec;
 }
-const tbSection=(md,head)=>{const m=new RegExp('##\\s*'+head+'[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)').exec(md||'');return m?m[1].trim():'';};
+const tbSection=(md,head)=>{const m=new RegExp('(?:^|\\n)##(?!#)\\s*'+head+'[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)').exec(md||'');return m?m[1].trim():'';};
 const fmtMin=s=>{s=Math.round(s||0);if(s<60)return s+'초';const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h?(h+'시간 '+m+'분'):(m+'분');};
 const monthStart=(off=0)=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth()+off,1).toISOString();};
 
@@ -38280,30 +38318,58 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     try{KeepAwake.hold('job:'+rec0.id);}catch(_){}
     try{await runSttInner(rec0,lng||rec0.lang||lang);}finally{TB_JOBS.delete(rec0.id);try{KeepAwake.release('job:'+rec0.id);}catch(_){}}
   };
+  /* 정리 절 쓰기 — 한국어 녹취는 「정리」(번역 없음), 그 밖은 「정리·번역」. 다시 돌리면 다른 쪽 절은 지운다 */
+  const putPolish=(md,res,pm,total)=>{
+    const meta=res.korean?'> 정리 모델: '+pm+' · 한국어 녹취라 번역 없이 정리':'> 정리·번역 모델: '+pm;
+    const body=segsMd({...res,progress:res.mm?null:'> ⏳ 조각별로 정리하는 중 ('+res.segs.length+(total?'/'+total:'')+') — 다 끝나면 개요·주제별 정리가 여기 붙습니다'});
+    return res.korean?tbPutTop(md,'정리',meta+'\n'+body)
+      :tbPutTop(md.replace(/(^|\n+)##(?!#)\s*정리\n[\s\S]*?(?=\n##\s|$)/,''),'정리·번역',meta+'\n'+body);
+  };
+  /* 받아쓰기와 다듬기·번역을 함께 돌린다 — 조각이 받아써지는 대로 차례로 번역해 기록에 쌓는다 */
   const runSttInner=async(rec0,lng)=>{
     let rec=rec0;const refs=audioRefs(rec.md);const file=local.current[rec.id];
     if(!refs.length&&!file){toast('이 기록에 녹음이 없습니다');return;}
-    const sttM=tbApplyStt();const sttN=tbSttName(sttM);
-    setBusy('받아쓰는 중… ('+sttN+')');
+    const sttM=tbApplyStt();const sttN=tbSttName(sttM);const pm=modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id);
+    let sttMsg='받아쓰는 중…',polMsg='';const busy=()=>setBusy(sttMsg+' ('+sttN+')'+(polMsg?' · '+polMsg+' ('+pm+')':''));busy();
+    const base=rec.md;const rawParts=[];let res=null,transcribing=true,total=0,polishErr=null;
+    const render=()=>{let md=base;
+      if(rawParts.length)md=tbPutTop(md,'녹취 (받아쓰기)','> 받아쓰기 모델: '+sttN+'\n\n'+rawParts.join('\n\n')+(transcribing?'\n\n> ⏳ 받아쓰는 중…':''));
+      if(res)md=putPolish(md,res,pm,transcribing?0:total);
+      rec={...rec,md};upd(rec.id,{md});};
+    const q=new TbSegQueue();
+    const polishP=polishStream(q,{hint:Store.cfg.sttHint,korean:lng==='ko'?true:(lng&&lng!=='auto'?false:undefined),
+      onStep:m=>{polMsg=m;busy();},onProgress:p=>{res=p;render();}}).catch(e=>{polishErr=e;return null;});
     try{
-      let all='',secs=0;
+      let secs=0;
       const jobs=file?[{name:file.name,blob:file}]:refs.map((r,i)=>({name:((/\[([^\]]*)\]/.exec(r.raw)||[])[1]||('녹음 '+(i+1))).replace(/^🎙\s*/,''),path:r.path}));
       for(let i=0;i<jobs.length;i++){
         const j=jobs[i];const tag=jobs.length>1?(' '+(i+1)+'/'+jobs.length):'';
-        setBusy('녹음 불러오는 중'+tag+'…');
+        sttMsg='녹음 불러오는 중'+tag+'…';busy();
         const blob=j.blob||await Files.blob(j.path);
         secs+=await tbDuration(blob);
-        const txt=await transcribeBlob(blob,{srcName:j.name,name:'tb',language:lng,onStep:m=>setBusy(m+tag+' ('+sttN+')')});
-        all+=(all?'\n\n':'')+(jobs.length>1?'### '+j.name+'\n':'')+txt;
+        if(jobs.length>1)rawParts.push('### '+j.name);
+        /* 조각은 2개씩 동시에 받아써져 순서가 뒤섞여 도착한다 — 앞 조각부터 차례로 내보낸다 */
+        const got=[];let next=0;
+        const emit=g=>{if(!g.t)return;
+          const time=g.t0!=null?mmss(g.t0)+'–'+mmss(g.t1):'';
+          rawParts.push((time?'#### '+time+'\n':'')+g.t);total++;
+          const label=(jobs.length>1?j.name+(time?' · ':''):'')+time;
+          (g.t.length>POLISH_CHUNK*1.5?splitChunks(g.t,POLISH_CHUNK):[g.t]).forEach((x,xi)=>q.push({label:xi?(label?label+' (이어서)':''):label,text:x}));};
+        const whole=await transcribeBlob(blob,{srcName:j.name,name:'tb',language:lng,onStep:m=>{sttMsg=m+tag;busy();},
+          onPart:(k,t,t0,t1,n)=>{got[k]={t,t0,t1};while(got[next])emit(got[next++]);render();}});
+        if(!got.length&&whole&&whole.trim()){emit({t:whole.trim()});render();}
       }
-      if(!all.trim())throw new Error('받아쓴 글이 비어 있습니다 — 녹음에 말소리가 있는지 확인하세요');
-      TB.log('전사',secs,jobs.length,sttM);
-      rec={...rec,md:tbPutTop(rec.md,'녹취 (받아쓰기)','> 받아쓰기 모델: '+sttN+'\n\n'+all)};upd(rec.id,{md:rec.md});
-      await runPolish(rec);
+      transcribing=false;q.end();sttMsg='받아쓰기 끝';busy();
+      if(!rawParts.some(p=>!/^###\s/.test(p)))throw new Error('받아쓴 글이 비어 있습니다 — 녹음에 말소리가 있는지 확인하세요');
+      TB.log('전사',secs,jobs.length,sttM);render();
+      const done=await polishP;
+      if(done){res=done;render();TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');toast(done.korean?'전사·정리 완료':'전사·번역 완료');}
+      else toast('⚠ 정리·번역 실패 — '+(polishErr&&polishErr.message||'알 수 없는 오류')+' · 받아쓴 글은 남아 있으니 ✨ 정리하기로 다시 하세요');
     }catch(e){
+      transcribing=false;q.end();
       console.error('[통번역 전사 실패]',e);
       toast('⚠ 전사 실패 — '+e.message);
-      upd(rec.id,{md:rec.md+'\n\n> ⚠ 전사 실패 — '+e.message+'\n'});
+      render();upd(rec.id,{md:rec.md+'\n\n> ⚠ 전사 실패 — '+e.message+'\n'});
     }
     setBusy('');
   };
@@ -38312,6 +38378,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     if(mine)try{KeepAwake.hold('job:'+rec.id);}catch(_){}
     try{await runPolishInner(rec);}finally{if(mine){TB_JOBS.delete(rec.id);try{KeepAwake.release('job:'+rec.id);}catch(_){}}}
   };
+  /* 이미 받아쓴 글로 다시 정리 — 「#### 시각」 조각 단위가 있으면 그대로, 없으면 1,800자씩 */
   const runPolishInner=async(rec)=>{
     const raw=(tbSection(rec.md,'녹취')||tbSection(rec.md,'실시간 원문')).replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
     if(raw.length<20){toast('정리할 글이 없습니다 — 먼저 전사하세요');return;}
@@ -38319,14 +38386,13 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     setBusy('정리·번역 준비 중… ('+pm+')');
     try{
       /* 예전에 받아 둔 녹취에도 되풀이 걷어내기를 적용한다(다시 받아쓰지 않고 정리하기만 눌러도 깨끗하게) */
-      const src=raw.replace(/^>\s*받아쓰기 모델:.*$/m,'').trim().split(/\n{2,}/).map(p=>/^#/.test(p)?p:deLoop(p)).filter(Boolean).join('\n\n');const korean=tbIsKorean(src);
-      const out=await polishTranscript(src,{hint:Store.cfg.sttHint,korean,onStep:m=>setBusy(m+' ('+pm+')')});
+      const src=raw.replace(/^>\s*받아쓰기 모델:.*$/m,'').replace(/^>\s*⏳.*$/gm,'').trim().split(/\n{2,}/).map(p=>/^#/.test(p)?p.replace(/^(#{3,4}[^\n]*\n?)([\s\S]*)$/,(m,h,b)=>h+deLoop(b)):deLoop(p)).filter(Boolean).join('\n\n');
+      const segs=parseSegs(src);const lng=rec.lang;let md0=rec.md;
+      const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean:lng==='ko'?true:undefined,
+        onStep:m=>setBusy(m+' ('+pm+')'),onProgress:p=>{upd(rec.id,{md:putPolish(md0,p,pm,segs.length)});}});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
-      /* 한국어 녹취는 「정리」(번역 없음), 그 밖은 「정리·번역」 — 다시 돌리면 다른 쪽 절은 지운다 */
-      const md=korean?tbPutTop(rec.md,'정리','> 정리 모델: '+pm+' · 한국어 녹취라 번역 없이 정리\n'+out)
-        :tbPutTop(rec.md.replace(/\n*##\s*정리\n[\s\S]*?(?=\n##\s|$)/,''),'정리·번역','> 정리·번역 모델: '+pm+'\n'+out);
-      upd(rec.id,{md});
-      toast(korean?'정리 완료':'정리·번역 완료');
+      upd(rec.id,{md:putPolish(md0,out,pm,segs.length)});
+      toast(out.korean?'정리 완료':'정리·번역 완료');
     }catch(e){toast('⚠ 정리·번역 실패 — '+e.message);}
     setBusy('');
   };
@@ -38369,7 +38435,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     <div style={{maxHeight:mobile?'none':'calc(100vh - 280px)',overflowY:'auto'}}>
       {!list.length&&<div style={{padding:'24px 12px',color:'var(--text-label)',fontSize:'var(--fs-sm2)',lineHeight:1.7}}>{recs.length?'검색 결과가 없습니다':<>아직 기록이 없습니다.<br/>위의 <b>🎙 음성 파일 전사</b>로 녹음을 올리거나, 🗣 통역을 멈추면 여기에 쌓입니다.</>}</div>}
       {list.map(r=>{const on=r.id===sel;const tags=r.tags||[];
-        const st=/##\s*정리·번역/.test(r.md)?'정리됨':/##\s*녹취/.test(r.md)?'전사됨':tags.includes('통역')?'자막만':'녹음만';
+        const st=/##(?!#)\s*정리(·번역)?\s*(\n|$)/.test(r.md)?'정리됨':/##\s*녹취/.test(r.md)?'전사됨':tags.includes('통역')?'자막만':'녹음만';
         return <div key={r.id} role="button" tabIndex={0} onClick={()=>setSel(r.id)} onKeyDown={e=>{if(e.key==='Enter')setSel(r.id);}}
           style={{padding:'9px 12px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',background:pick.has(r.id)?'#FEF2F2':on?'var(--surface-active)':'transparent',display:'flex',gap:8,alignItems:'flex-start'}}>
           <input type="checkbox" className="tb-pick" aria-label={r.title+' 선택'} checked={pick.has(r.id)} onClick={e=>e.stopPropagation()} onChange={()=>togPick(r.id)}
