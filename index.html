@@ -37795,7 +37795,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.26';
+const TB_VERSION='v10.27';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38340,24 +38340,26 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     const polishP=polishStream(q,{hint:Store.cfg.sttHint,korean:lng==='ko'?true:(lng&&lng!=='auto'?false:undefined),
       onStep:m=>{polMsg=m;busy();},onProgress:p=>{res=p;render();}}).catch(e=>{polishErr=e;return null;});
     try{
-      let secs=0;
+      let secs=0,tOff=0;
       const jobs=file?[{name:file.name,blob:file}]:refs.map((r,i)=>({name:((/\[([^\]]*)\]/.exec(r.raw)||[])[1]||('녹음 '+(i+1))).replace(/^🎙\s*/,''),path:r.path}));
       for(let i=0;i<jobs.length;i++){
         const j=jobs[i];const tag=jobs.length>1?(' '+(i+1)+'/'+jobs.length):'';
         sttMsg='녹음 불러오는 중'+tag+'…';busy();
         const blob=j.blob||await Files.blob(j.path);
-        secs+=await tbDuration(blob);
+        /* 15분 조각 녹음은 앞 조각 길이만큼 시각을 밀어 회의 전체 시각으로(webm은 길이를 못 읽는 일이 많아 받아쓴 조각의 끝 시각을 쓴다) */
+        const off=tOff;const dur=await tbDuration(blob);secs+=dur;let endT=0;
         if(jobs.length>1)rawParts.push('### '+j.name);
         /* 조각은 2개씩 동시에 받아써져 순서가 뒤섞여 도착한다 — 앞 조각부터 차례로 내보낸다 */
         const got=[];let next=0;
         const emit=g=>{if(!g.t)return;
-          const time=g.t0!=null?mmss(g.t0)+'–'+mmss(g.t1):'';
+          const time=g.t0!=null?mmss(off+g.t0)+'–'+mmss(off+g.t1):'';
           rawParts.push((time?'#### '+time+'\n':'')+g.t);total++;
           const label=(jobs.length>1?j.name+(time?' · ':''):'')+time;
           (g.t.length>POLISH_CHUNK*1.5?splitChunks(g.t,POLISH_CHUNK):[g.t]).forEach((x,xi)=>q.push({label:xi?(label?label+' (이어서)':''):label,text:x}));};
         const whole=await transcribeBlob(blob,{srcName:j.name,name:'tb',language:lng,onStep:m=>{sttMsg=m+tag;busy();},
-          onPart:(k,t,t0,t1,n)=>{got[k]={t,t0,t1};while(got[next])emit(got[next++]);render();}});
+          onPart:(k,t,t0,t1,n)=>{got[k]={t,t0,t1};if(t1>endT)endT=t1;while(got[next])emit(got[next++]);render();}});
         if(!got.length&&whole&&whole.trim()){emit({t:whole.trim()});render();}
+        tOff=off+Math.max(endT,dur);
       }
       transcribing=false;q.end();sttMsg='받아쓰기 끝';busy();
       if(!rawParts.some(p=>!/^###\s/.test(p)))throw new Error('받아쓴 글이 비어 있습니다 — 녹음에 말소리가 있는지 확인하세요');
