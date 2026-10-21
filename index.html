@@ -37867,7 +37867,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.30';
+const TB_VERSION='v10.31';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38799,6 +38799,64 @@ function TbSetup({onRetry}){
 }
 
 /* ── 앱 ── */
+/* ── 머리줄 Supabase 용량 — 관리자만 (v10.31) ──
+   SQL 함수 tb_usage()(관리자만 실행, 아래 TB_USAGE_SQL)가 저장소 파일 합계와 DB 크기를 돌려준다.
+   함수가 아직 없으면 「용량 설정 필요」를 보이고, 누르면 SQL 편집기에 붙여 넣을 문장을 보여 준다 */
+const TB_FREE={files:1024**3,db:500*1024**2};   /* Supabase 무료 플랜 한도: 저장소 1GB, DB 500MB */
+const TB_USAGE_SQL=`create or replace function public.tb_usage() returns json
+language plpgsql security definer set search_path = public, storage as $$
+begin
+  if not exists (select 1 from public.tb_members m
+    where lower(m.email) = lower(auth.jwt() ->> 'email') and m.role = 'owner') then
+    raise exception 'owner only';
+  end if;
+  return json_build_object(
+    'files',  (select coalesce(sum((metadata ->> 'size')::bigint), 0) from storage.objects),
+    'nfiles', (select count(*) from storage.objects),
+    'db',     pg_database_size(current_database()));
+end $$;
+revoke all on function public.tb_usage() from public, anon;
+grant execute on function public.tb_usage() to authenticated;`;
+const fmtBytes=b=>b>=1024**3?(b/1024**3).toFixed(2)+'GB':b>=1024**2?Math.round(b/1024**2)+'MB':Math.round(b/1024)+'KB';
+function TbStorageChip(){
+  const {Modal}=window.HDWorkbookDesignSystem_ad60e4;
+  const mobile=useMobile();
+  const [u,setU]=React.useState(undefined);const [open,setOpen]=React.useState(false);const [copied,setCopied]=React.useState(false);
+  const load=React.useCallback(async()=>{
+    try{const {data,error}=await Store.sb.rpc('tb_usage');
+      if(error){setU(/tb_usage|PGRST202|42883|not find|does not exist/i.test((error.code||'')+' '+(error.message||''))?'nosetup':null);console.warn('[통번역] 용량 읽기 실패',error);}
+      else setU(data);}
+    catch(e){console.warn('[통번역] 용량 읽기 실패',e);setU(null);}
+  },[]);
+  React.useEffect(()=>{load();const t=setInterval(load,10*60*1000);
+    const f=()=>setTimeout(load,4000);window.addEventListener('tb-usage',f);window.addEventListener('focus',load);
+    return()=>{clearInterval(t);window.removeEventListener('tb-usage',f);window.removeEventListener('focus',load);};},[load]);
+  if(u===undefined||u===null)return null;
+  const chip={display:'inline-flex',alignItems:'center',gap:6,border:'1px solid var(--border-default)',borderRadius:6,background:'var(--surface-calc-cell)',
+    padding:mobile?'3px 7px':'3px 10px',fontSize:mobile?11:'var(--fs-sm)',color:'var(--text-body)',cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'};
+  const copy=async()=>{try{await navigator.clipboard.writeText(TB_USAGE_SQL);setCopied(true);setTimeout(()=>setCopied(false),1500);}catch(_){}};
+  if(u==='nosetup')return <>
+    <button type="button" style={{...chip,color:'var(--text-muted)'}} onClick={()=>setOpen(true)} title="저장 용량 표시를 켜려면 SQL 한 번 실행이 필요합니다">💾 용량 설정 필요</button>
+    <Modal open={open} onClose={()=>setOpen(false)} title="💾 저장 용량 표시 켜기" width={560}>
+      <div style={{fontSize:'var(--fs-sm2)',lineHeight:1.7}}>Supabase 대시보드 › SQL Editor에 아래를 붙여 넣고 Run을 누른 뒤, 이 창을 닫고 새로고침하세요. 관리자만 실행할 수 있는 함수라 팀원에게는 보이지 않습니다.</div>
+      <pre style={{background:'var(--surface-calc-cell)',padding:10,borderRadius:4,fontSize:12,overflowX:'auto',whiteSpace:'pre'}}>{TB_USAGE_SQL}</pre>
+      <button type="button" style={chip} onClick={copy}>{copied?'✓ 복사됨':'📋 복사'}</button>
+    </Modal></>;
+  const pf=u.files/TB_FREE.files,pd=u.db/TB_FREE.db,worst=Math.max(pf,pd);
+  const col=worst>=0.9?'var(--color-danger)':worst>=0.7?'#b45309':'var(--text-body)';
+  const pct=x=>Math.round(x*100)+'%';
+  return <>
+    <button type="button" style={{...chip,color:col}} onClick={()=>setOpen(true)} title={'Supabase 저장소 '+fmtBytes(u.files)+' / 1GB · DB '+fmtBytes(u.db)+' / 500MB — 눌러서 자세히'}>
+      💾 {mobile?pct(worst):<>저장소 <b>{fmtBytes(u.files)}</b> · DB <b>{fmtBytes(u.db)}</b></>}</button>
+    <Modal open={open} onClose={()=>setOpen(false)} title="💾 Supabase 저장 용량" width={460}>
+      {[['파일 저장소 (녹음·첨부)',u.files,TB_FREE.files,u.nfiles+'개'],['데이터베이스 (기록·설정)',u.db,TB_FREE.db,'']].map(([l,v,max,n])=>
+        <div key={l} style={{marginBottom:12}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:'var(--fs-sm2)'}}><span>{l}{n?' · '+n:''}</span><span style={{fontVariantNumeric:'tabular-nums'}}>{fmtBytes(v)} / {fmtBytes(max)} ({pct(v/max)})</span></div>
+          <div style={{height:8,background:'var(--border-default)',borderRadius:4,marginTop:4}}><div style={{height:8,borderRadius:4,width:Math.min(100,v/max*100)+'%',background:v/max>=0.9?'var(--color-danger)':v/max>=0.7?'#d97706':'#2563eb'}}/></div>
+        </div>)}
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',lineHeight:1.6}}>무료 플랜 한도 기준입니다. 통역·대화 녹음은 v10.29부터 서버에 올리지 않으므로, 파일 저장소는 🎙 음성 파일 전사로 올린 녹음과 예전 녹음이 대부분입니다.</div>
+    </Modal></>;
+}
 /* ── 머리줄 사용량·요금 — 관리자는 팀 전체, 팀원은 본인 것 (이번 달) ──
    관리자: tb-admin 'list'의 rows(사람별 기록) · 팀원: 본인 tb_usage. 통역·대화를 멈추면(tb-usage 신호) 다시 읽는다 */
 function TbUsageChip({role,onOpenSettings}){
@@ -38906,6 +38964,7 @@ function TbShell({user,role,onLogout}){
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
     <AppHeader mark="🗣" title="통번역" version={role==='owner'?TB_VERSION:undefined} tools={<>
       <TbUsageChip role={role} onOpenSettings={()=>setTab('me')}/>
+      {role==='owner'&&<TbStorageChip/>}
       {!mobile&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}{role==='owner'?' · 관리자':''}</span>}
       {role==='owner'&&<Button variant={tab==='me'?'secondary':'ghost'} size="xs" onClick={()=>setTab(tab==='me'?'live':'me')} title="설정">⚙ 설정{newModels&&newModels.length?' 🆕':''}</Button>}
       <Button variant="ghost" size="xs" onClick={()=>setPwOpen(true)} title="비밀번호를 정해 두면 메일 없이 로그인">🔑{mobile?'':' 비밀번호'}</Button>
