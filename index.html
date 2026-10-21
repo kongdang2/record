@@ -36478,6 +36478,62 @@ const fileSafe=s=>{
   return (base||'file')+ext;
 };
 
+/* 통역·대화 녹음 보관(v10.29) — 서버(Supabase)에는 올리지 않는다.
+   ① 정지하는 순간 기기에 파일로 저장(PC 크롬·엣지는 한 번 지정한 폴더, 그 밖은 다운로드 폴더)
+   ② 같은 파일을 이 브라우저(IndexedDB, 경로 dev/…)에 14일 보관 — 정리하기가 다시 받아쓸 수 있게 */
+const DEV_REC_DAYS=14;
+const DEV_MISSING=path=>String(path).startsWith('dev/')
+  ?'이 기기 브라우저에 녹음이 없습니다(보관 '+DEV_REC_DAYS+'일이 지났거나 다른 기기에서 녹음) — 기기에 저장된 녹음 파일을 🎙 음성 파일 전사로 올려 주세요'
+  :'이 브라우저에 파일이 없습니다';
+const DevRec={
+  meta(){try{return JSON.parse(localStorage.getItem('tb.devrec')||'{}');}catch(_){return {};}},
+  setMeta(m){try{localStorage.setItem('tb.devrec',JSON.stringify(m));}catch(_){}},
+  forget(paths){const m=this.meta();paths.forEach(p=>delete m[p]);this.setMeta(m);},
+  async keep(blob,name){const path='dev/'+uid()+'-'+fileSafe(name);await idbPut(path,blob);const m=this.meta();m[path]=Date.now();this.setMeta(m);return path;},
+  async drop(paths){paths=paths.filter(p=>String(p).startsWith('dev/'));for(const p of paths){try{await idbDel(p);}catch(_){}}this.forget(paths);return paths.length;},
+  async sweep(){const m=this.meta();return this.drop(Object.keys(m).filter(p=>Date.now()-m[p]>DEV_REC_DAYS*864e5));},
+  /* 저장 폴더 — 폴더를 고를 수 있는 브라우저(PC 크롬·엣지)만 */
+  get canPick(){return typeof window.showDirectoryPicker==='function';},
+  async dir(){try{return (await idbGet('cfg/recDir'))||null;}catch(_){return null;}},
+  async pick(){const h=await window.showDirectoryPicker({id:'tb-rec',mode:'readwrite'});await idbPut('cfg/recDir',h);return h;},
+  async clearDir(){await idbDel('cfg/recDir');},
+  /* 브라우저는 클릭한 순간에만 폴더 권한을 물을 수 있다 — 시작 단추에서 미리 받아 둔다 */
+  async prepare(){const h=await this.dir();if(!h)return;try{if(await h.queryPermission({mode:'readwrite'})!=='granted')await h.requestPermission({mode:'readwrite'});}catch(_){}},
+  async save(blob,name){
+    const h=await this.dir();
+    if(h){try{if(await h.queryPermission({mode:'readwrite'})==='granted'){
+      const f=await h.getFileHandle(name,{create:true});const w=await f.createWritable();await w.write(blob);await w.close();return '📁 '+h.name;}}
+      catch(e){console.warn('[녹음 폴더 저장 실패]',e);}}
+    const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(u),60000);return '다운로드 폴더';
+  }
+};
+/* 통역·대화 정지 때 녹음 조각들을 기기에 저장하고 브라우저에 보관 → 기록에 붙일 링크 */
+async function tbKeepRecParts(s,stamp,prefix,setSaving,toast){
+  const links=[];let where='';
+  for(let i=0;i<s.recParts.length;i++){
+    setSaving('녹음 저장 중 '+(i+1)+'/'+s.recParts.length);
+    const p=s.recParts[i];p.blob=await tbFixDur(p.blob,p.sec*1000);const ext=/mp4/.test(p.blob.type)?'m4a':'webm';
+    const name=prefix+' '+stamp.replace(':','')+(s.recParts.length>1?' ('+(i+1)+')':'')+'.'+ext;
+    try{where=await DevRec.save(p.blob,name);}catch(e){s.log('기기 저장 실패: '+e.message);toast('⚠ 기기에 녹음 저장 실패 — '+e.message);}
+    try{const path=await DevRec.keep(p.blob,name);links.push('[🎙 '+name+'](pms:'+path+')');}
+    catch(e){s.log('브라우저 보관 실패: '+e.message);}
+    if(i<s.recParts.length-1)await new Promise(ok=>setTimeout(ok,400));   /* 다운로드가 여러 개면 브라우저가 막지 않게 조금씩 */
+  }
+  return {links,where};
+}
+/* 녹음 저장 폴더 단추 — PC 크롬·엣지에서만 보인다 */
+function RecDirBtn({disabled}){
+  const [name,setName]=React.useState(null);
+  React.useEffect(()=>{DevRec.dir().then(h=>setName(h?h.name:''));},[]);
+  if(!DevRec.canPick||name===null)return null;
+  const pick=async()=>{try{const h=await DevRec.pick();setName(h.name);}catch(_){}};
+  return <span style={{whiteSpace:'nowrap'}}>
+    <button type="button" disabled={disabled} onClick={pick} title="녹음 파일을 저장할 폴더 — 한 번 고르면 다음부터 거기에 저장합니다(들어올 때 「허용」을 한 번 물을 수 있음)"
+      style={{border:'1px solid var(--border-default)',borderRadius:4,background:'none',padding:'1px 6px',cursor:disabled?'default':'pointer',fontSize:'inherit',fontFamily:'inherit',color:'inherit'}}>📁 {name||'저장 폴더 지정'}</button>
+    {name&&!disabled&&<button type="button" onClick={async()=>{await DevRec.clearDir();setName('');}} title="지정 해제 — 다운로드 폴더에 저장"
+      style={{border:'none',background:'none',cursor:'pointer',color:'var(--text-label)',fontSize:'inherit',padding:'0 2px'}}>×</button>}</span>;
+}
 const Files={
   cache:{},                                   /* 경로 → {url, exp} */
   get cloud(){return Store.mode==='supabase';},
@@ -36495,17 +36551,17 @@ const Files={
   /* 볼 때 쓰는 주소 (클라우드는 1시간 서명 주소) */
   async url(path){
     const c=this.cache[path];if(c&&c.exp>Date.now())return c.url;
-    if(this.cloud){
+    if(this.cloud&&!String(path).startsWith('dev/')){
       const {data,error}=await Store.sb.storage.from(BUCKET).createSignedUrl(path,3600);
       if(error)throw new Error(error.message);
       this.cache[path]={url:data.signedUrl,exp:Date.now()+3300e3};return data.signedUrl;
     }
-    const b=await idbGet(path);if(!b)throw new Error('이 브라우저에 파일이 없습니다');
+    const b=await idbGet(path);if(!b)throw new Error(DEV_MISSING(path));
     const u=URL.createObjectURL(b);this.cache[path]={url:u,exp:Date.now()+36e5};return u;
   },
   async blob(path){
-    if(this.cloud){const {data,error}=await Store.sb.storage.from(BUCKET).download(path);if(error)throw new Error(error.message);return data;}
-    const b=await idbGet(path);if(!b)throw new Error('이 브라우저에 파일이 없습니다');return b;
+    if(this.cloud&&!String(path).startsWith('dev/')){const {data,error}=await Store.sb.storage.from(BUCKET).download(path);if(error)throw new Error(error.message);return data;}
+    const b=await idbGet(path);if(!b)throw new Error(DEV_MISSING(path));return b;
   },
   /* Claude 비전용 — 더 작게 줄여서 base64 */
   async forVision(path){
@@ -36515,8 +36571,8 @@ const Files={
   },
   async del(path){
     delete this.cache[path];
-    if(this.cloud){const {error}=await Store.sb.storage.from(BUCKET).remove([path]);if(error)throw new Error(error.message);}
-    else await idbDel(path);
+    if(this.cloud&&!String(path).startsWith('dev/')){const {error}=await Store.sb.storage.from(BUCKET).remove([path]);if(error)throw new Error(error.message);}
+    else{await idbDel(path);DevRec.forget([path]);}
   },
   /* 단계별 점검: 로그인 → 버킷 → 올리기 → 주소 → 내려받기 → 지우기 */
   async diag(){
@@ -37049,13 +37105,14 @@ function LiveView({db,setDb,toast,onOpenNote}){
   React.useEffect(()=>{const f=()=>setOpt(o=>({...o,model:Store.cfg.liveModel||o.model,asrModel:Store.cfg.liveAsrModel||o.asrModel,trModel:Store.cfg.liveTrModel||o.trModel}));
     window.addEventListener('live-cfg',f);return()=>window.removeEventListener('live-cfg',f);},[]);
   const start=async()=>{
+    if(opt.record)DevRec.prepare();
     if(window.CONV&&CONV.sess&&CONV.sess.running){toast('💬 대화 탭이 켜져 있습니다 — 먼저 정지하세요');return;}
     Store.saveCfg({liveMode:opt.mode,liveModel:opt.model,liveAsrModel:opt.asrModel,liveTrModel:opt.trModel,liveFrom:opt.from,liveMix:!!opt.mix,liveHost:opt.host,liveClean:opt.clean,liveRecord:opt.record});
     const s=new LiveSession({...opt},force);LIVE.sess=s;LIVE.saved=null;force();
     try{await s.start();}
     catch(e){s.stop(true);s.err=/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message;force();}
   };
-  /* 정지 → 녹음 올리기 → 기록 자동 저장 */
+  /* 정지 → 녹음을 기기에 저장(서버에는 안 올림) → 기록 자동 저장 → 바로 정리 */
   const stop=async()=>{
     const s=LIVE.sess;if(!s)return;s.stop(false);force();
     const hasText=s.segs.some(g=>(g.zh||g.ko).trim());
@@ -37064,14 +37121,8 @@ function LiveView({db,setDb,toast,onOpenNote}){
     /* 번역이 아직 돌고 있으면 잠깐 기다린다(최대 8초) — 속도 우선은 서버가 마지막 문장을 보내고 닫을 때까지 */
     for(let i=0;i<16&&(s.segs.some(g=>g.zhDone&&!g.koDone)||(s.opt.mode!=='asr'&&s.conns.some(c=>!c.gone)));i++)await new Promise(r=>setTimeout(r,500));
     const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
-    const title='통역 '+stamp;const links=[];
-    for(let i=0;i<s.recParts.length;i++){
-      setSaving('녹음 올리는 중 '+(i+1)+'/'+s.recParts.length);
-      const p=s.recParts[i];p.blob=await tbFixDur(p.blob,p.sec*1000);const ext=/mp4/.test(p.blob.type)?'m4a':'webm';
-      const name='통역녹음 '+stamp.replace(':','')+(s.recParts.length>1?' ('+(i+1)+')':'')+'.'+ext;
-      try{const r=await Files.put(new File([p.blob],name,{type:p.blob.type||'audio/webm'}));links.push('[🎙 '+name+'](pms:'+r.path+')');}
-      catch(e){s.log('녹음 올리기 실패: '+e.message);toast('⚠ 녹음 올리기 실패 — '+e.message);}
-    }
+    const title='통역 '+stamp;
+    const {links,where}=await tbKeepRecParts(s,stamp,'통역녹음',setSaving,toast);
     const nn=newNote(title,'work',s.toMarkdown(title,links),['통역']);
     nn.lang=s.opt.mix?'auto':s.opt.from;   /* 정리하기로 녹음을 다시 받아쓸 때의 언어 — 섞인 회의는 자동 감지 */
     /* 녹음과 자막 맞춰 보기용 — 녹음 조각이 시작한 때와 문장마다 시작 시각(초) */
@@ -37079,7 +37130,9 @@ function LiveView({db,setDb,toast,onOpenNote}){
       segs:s.segs.filter(g=>(g.zh||g.ko).trim()).map(g=>({t:Math.round((g.t||0)*10)/10,ko:(g.ko||'').trim(),zh:(g.zh||g.zhS||'').trim()}))};
     setDb('notes',arr=>[...arr,nn]);LIVE.saved={id:nn.id,audio:links.length};setSaving('');force();
     window.dispatchEvent(new Event('tb-usage'));
-    toast('통역 기록을 저장했습니다'+(links.length?' · 녹음 '+links.length+'개 포함':''));
+    toast('통역 기록을 저장했습니다'+(where?' · 녹음 → '+where:''));
+    /* 녹음이 있으면 바로 다시 받아써서 정확한 회의록까지 — 번역/정리 화면에서 진행이 보인다 */
+    if(links.length)setTimeout(()=>onOpenNote(nn.id,true),300);
   };
   const reset=()=>{LIVE.sess=null;LIVE.saved=null;force();};
   const segs=sess?sess.segs.filter(g=>g.zh||g.zhS||g.ko||g.koS):[];
@@ -37117,7 +37170,8 @@ function LiveView({db,setDb,toast,onOpenNote}){
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6,display:'flex',flexWrap:'wrap',gap:'4px 12px',alignItems:'center'}}>
       <span>{modeDesc}</span>
       <span style={{color:'var(--text-label)'}}>· 모델: {opt.mode==='asr'?modelName(opt.asrModel)+' + '+modelName(opt.trModel):modelName(opt.model)}</span>
-      <label style={{cursor:'pointer'}}><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
+      <label style={{cursor:'pointer'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 회의록까지 만듭니다"><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
+      {opt.record&&<RecDirBtn disabled={running}/>}
       {/* 고급(서버 주소) 메뉴는 없앴다 — 기본 주소(싱가포르)만 쓴다 */}
     </div>
 
@@ -37429,6 +37483,7 @@ function ConvView({setDb,toast,onOpenNote}){
   const hasTts=!!window.speechSynthesis;
   const voiceOk=!hasTts||!voices||!!convVoice(theirs.tts);
   const start=async()=>{
+    if(opt.record)DevRec.prepare();
     if(window.LIVE&&LIVE.sess&&LIVE.sess.running){toast('🗣 통역 탭이 켜져 있습니다 — 먼저 정지하세요');return;}
     /* 휴대폰 브라우저는 단추를 누른 순간에만 소리를 허락한다 — 빈 소리로 미리 풀어 둔다 */
     try{const ss=window.speechSynthesis;if(ss){ss.cancel();const u=new SpeechSynthesisUtterance(' ');u.volume=0;ss.speak(u);}}catch(_){}
@@ -37445,20 +37500,16 @@ function ConvView({setDb,toast,onOpenNote}){
     const segs=s.allSegs.filter(g=>(g.zh||'').trim());
     if(!segs.length&&!s.recParts.length){setSaving('');return;}
     const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
-    const title='대화 '+stamp;const links=[];
-    for(let i=0;i<s.recParts.length;i++){
-      setSaving('녹음 올리는 중 '+(i+1)+'/'+s.recParts.length);
-      const p=s.recParts[i];p.blob=await tbFixDur(p.blob,p.sec*1000);const ext=/mp4/.test(p.blob.type)?'m4a':'webm';
-      const name='대화녹음 '+stamp.replace(':','')+(s.recParts.length>1?' ('+(i+1)+')':'')+'.'+ext;
-      try{const r=await Files.put(new File([p.blob],name,{type:p.blob.type||'audio/webm'}));links.push('[🎙 '+name+'](pms:'+r.path+')');}
-      catch(e){s.log('녹음 올리기 실패: '+e.message);toast('⚠ 녹음 올리기 실패 — '+e.message);}
-    }
+    const title='대화 '+stamp;
+    const {links,where}=await tbKeepRecParts(s,stamp,'대화녹음',setSaving,toast);
     const nn=newNote(title,'work',s.toMarkdown(title,links),['통역','대화']);
+    nn.lang='auto';   /* 내 한국어와 상대 언어가 섞여 있다 — 정리하기 때 자동 감지 */
     nn.live={parts:s.recParts.map(p=>Math.max(0,Math.round((p.t0-s.t0)/100)/10)),secs:s.recParts.map(p=>p.sec),
       segs:segs.map(g=>({t:Math.round((g.t||0)*10)/10,ko:(g.who==='me'?g.zh:g.ko||'').trim(),zh:(g.who==='me'?g.ko||'':g.zh).trim()}))};
     setDb('notes',arr=>[...arr,nn]);CONV.saved={id:nn.id};setSaving('');force();
     window.dispatchEvent(new Event('tb-usage'));
-    toast('대화 기록을 저장했습니다');
+    toast('대화 기록을 저장했습니다'+(where?' · 녹음 → '+where:''));
+    if(links.length)setTimeout(()=>onOpenNote(nn.id,true),300);
   };
   const reset=()=>{CONV.sess=null;CONV.saved=null;force();};
   /* 누르는 동안 말하기 */
@@ -37500,7 +37551,8 @@ function ConvView({setDb,toast,onOpenNote}){
       {tog('speakThem','내 말 → '+theirs.label+' 음성','내 말을 번역해 상대 언어로 읽어 줍니다. 끄면 자막만')}
       <label style={{cursor:'pointer',whiteSpace:'nowrap'}}>속도 <select style={{...sel,padding:'1px 4px'}} value={opt.rate} onChange={e=>set({rate:e.target.value})}>
         {['0.8','0.9','1','1.15','1.3'].map(r=><option key={r} value={r}>{r}×</option>)}</select></label>
-      <label style={{cursor:'pointer',whiteSpace:'nowrap'}}><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
+      <label style={{cursor:'pointer',whiteSpace:'nowrap'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 정리까지 합니다"><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
+      {opt.record&&<RecDirBtn disabled={running}/>}
     </div>
     {!hasTts&&<InfoBar tone="warn">이 브라우저는 음성 읽기를 지원하지 않습니다 — 내 말은 자막으로만 전달됩니다</InfoBar>}
     {hasTts&&!voiceOk&&<InfoBar tone="warn">이 기기에 {theirs.label} 음성이 없습니다 — 휴대폰 설정 › 텍스트 음성 변환(TTS)에서 {theirs.label} 음성을 내려받으면 읽어 줍니다</InfoBar>}
@@ -37803,7 +37855,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.28';
+const TB_VERSION='v10.29';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38015,6 +38067,7 @@ const TB={
       if(error)throw new Error(explainSbError(error));}
   },
   async dropFiles(paths){
+    await DevRec.drop(paths);
     const mine=paths.filter(p=>p.startsWith(Store.user.id+'/'));
     for(let i=0;i<mine.length;i+=100){const {error}=await Store.sb.storage.from('pms-files').remove(mine.slice(i,i+100));
       if(error)throw new Error('녹음 파일 삭제 실패 — '+error.message);}
@@ -38792,7 +38845,9 @@ function TbShell({user,role,onLogout}){
   const recsRef=React.useRef([]);const timers=React.useRef({});
   const toast=m=>{setToastMsg(m);clearTimeout(timers.current.t);timers.current.t=setTimeout(()=>setToastMsg(''),2200);};
   React.useEffect(()=>{try{localStorage.setItem('tb.tab',tab);}catch(_){}},[tab]);
-  React.useEffect(()=>{TB.list().then(r=>{recsRef.current=r;setRecs(r);}).catch(e=>setLoadErr(e.message));},[]);
+  React.useEffect(()=>{TB.list().then(r=>{recsRef.current=r;setRecs(r);}).catch(e=>setLoadErr(e.message));
+    DevRec.sweep().catch(()=>{});   /* 14일 지난 브라우저 보관 녹음 지우기 */
+  },[]);
   /* Claude 토큰 기록(요금 계산용) */
   React.useEffect(()=>{window.__claudeUsage=TB.addClaude;const t=setInterval(TB.flushClaude,60000);
     const bye=()=>{TB.flushClaude();};window.addEventListener('pagehide',bye);
@@ -38861,7 +38916,7 @@ function TbShell({user,role,onLogout}){
           <LiveView db={{notes:recs||[]}} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         {/* 대화(양방향 통역)도 숨겨 두기만 한다 */}
         <div style={{display:tab==='conv'?'block':'none'}}>
-          <ConvView setDb={setDbShim} toast={toast} onOpenNote={(id)=>{setSel(id);setTab('rec');}}/></div>
+          <ConvView setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         {/* 녹취록도 숨겨 두기만 한다 — 전사·정리 중에 다른 탭을 봐도 작업 상태가 사라지지 않게 */}
         <div style={{display:tab==='rec'?'block':'none'}}>
           <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/></div>
