@@ -36483,12 +36483,14 @@ const fileSafe=s=>{
    ② 같은 파일을 이 브라우저(IndexedDB, 경로 dev/…)에 14일 보관 — 정리하기가 다시 받아쓸 수 있게 */
 const DEV_REC_DAYS=14;
 const DEV_MISSING=path=>String(path).startsWith('dev/')
-  ?'이 기기 브라우저에 녹음이 없습니다(보관 '+DEV_REC_DAYS+'일이 지났거나 다른 기기에서 녹음) — 기기에 저장된 녹음 파일을 🎙 음성 파일 전사로 올려 주세요'
+  ?'이 기기 브라우저에 녹음이 없습니다(보관 '+DEV_REC_DAYS+'일이 지났거나 다른 기기에서 녹음) — 📂 파일 연결로 기기에 저장해 둔 녹음 파일을 다시 붙이세요'
   :'이 브라우저에 파일이 없습니다';
 const DevRec={
   meta(){try{return JSON.parse(localStorage.getItem('tb.devrec')||'{}');}catch(_){return {};}},
   setMeta(m){try{localStorage.setItem('tb.devrec',JSON.stringify(m));}catch(_){}},
   forget(paths){const m=this.meta();paths.forEach(p=>delete m[p]);this.setMeta(m);},
+  /* 기기에 저장해 둔 파일을 같은 자리(dev/ 경로)에 다시 붙인다 — 재생·정리하기가 다시 된다(보관 기간도 새로 시작) */
+  async relink(path,file){await idbPut(path,file);const m=this.meta();m[path]=Date.now();this.setMeta(m);try{delete Files.cache[path];}catch(_){}},
   async keep(blob,name){const path='dev/'+uid()+'-'+fileSafe(name);await idbPut(path,blob);const m=this.meta();m[path]=Date.now();this.setMeta(m);return path;},
   async drop(paths){paths=paths.filter(p=>String(p).startsWith('dev/'));for(const p of paths){try{await idbDel(p);}catch(_){}}this.forget(paths);return paths.length;},
   async sweep(){const m=this.meta();return this.drop(Object.keys(m).filter(p=>Date.now()-m[p]>DEV_REC_DAYS*864e5));},
@@ -36521,6 +36523,16 @@ async function tbKeepRecParts(s,stamp,prefix,setSaving,toast){
     if(i<s.recParts.length-1)await new Promise(ok=>setTimeout(ok,400));   /* 다운로드가 여러 개면 브라우저가 막지 않게 조금씩 */
   }
   return {links,where};
+}
+/* 📂 파일 연결 — 브라우저 보관이 끝난 녹음(dev/)에 기기의 파일을 다시 붙이는 단추 */
+function DevRelink({path,onDone}){
+  const inp=React.useRef(null);
+  if(!String(path||'').startsWith('dev/'))return null;
+  const pick=async e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(!f)return;
+    try{await DevRec.relink(path,f);onDone&&onDone();}catch(err){alert('연결 실패 — '+err.message);}};
+  return <span><input ref={inp} type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.aac" style={{display:'none'}} onChange={pick}/>
+    <button type="button" onClick={()=>inp.current&&inp.current.click()} title="기기에 저장해 둔 이 녹음 파일을 골라 다시 붙입니다(서버에는 안 올림)"
+      style={{border:'1px solid var(--border-default)',borderRadius:4,background:'none',padding:'1px 8px',cursor:'pointer',fontSize:'var(--fs-sm)',fontFamily:'inherit'}}>📂 파일 연결</button></span>;
 }
 /* 녹음 저장 폴더 단추 — PC 크롬·엣지에서만 보인다 */
 function RecDirBtn({disabled}){
@@ -36805,9 +36817,9 @@ const audioRefs=md=>pmsRefs(md).filter(r=>AUDIO_EXT.test(r.path)||/🎙/.test(r.
 
 /* 재생기 — pms: 음성 링크는 재생 막대로 */
 function PmsAudio({src,label}){
-  const [u,setU]=React.useState(null);const [err,setErr]=React.useState('');
-  React.useEffect(()=>{let live=true;Files.url(src.slice(4)).then(x=>live&&setU(x)).catch(e=>live&&setErr(e.message));return()=>{live=false;};},[src]);
-  if(err)return <span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)'}}>🎙 {label} — {err}</span>;
+  const [u,setU]=React.useState(null);const [err,setErr]=React.useState('');const [ver,setVer]=React.useState(0);
+  React.useEffect(()=>{let live=true;setErr('');Files.url(src.slice(4)).then(x=>live&&setU(x)).catch(e=>live&&setErr(e.message));return()=>{live=false;};},[src,ver]);
+  if(err)return <span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)',display:'inline-flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>🎙 {label} — {err} <DevRelink path={src.slice(4)} onDone={()=>setVer(v=>v+1)}/></span>;
   return <span style={{display:'inline-flex',alignItems:'center',gap:8,margin:'4px 0'}}>
     <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>🎙 {label}</span>
     {u?<audio src={u} controls preload="none" style={{height:32,verticalAlign:'middle'}}/>:<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>불러오는 중…</span>}
@@ -37855,7 +37867,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.29';
+const TB_VERSION='v10.30';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38326,6 +38338,7 @@ function TbAudioSet({refs,live}){
         <audio ref={x=>els.current[i]=x} controls preload="none" style={{height:32,flex:'1 1 260px',maxWidth:520}}
           onPlay={()=>onPlay(i)} onTimeUpdate={e=>{if(ready.current[i]===true)setNow(parts[i]+e.currentTarget.currentTime);}}/>
         {busy===i&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>불러오는 중…</span>}
+        {err&&<DevRelink path={r.path} onDone={()=>{ready.current[i]=null;setErr('');}}/>}
       </div>)}
       {err&&<span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)'}}>⚠ {err}</span>}
     </div>
