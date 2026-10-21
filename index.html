@@ -37880,7 +37880,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.32';
+const TB_VERSION='v10.33';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38929,6 +38929,18 @@ function TbShell({user,role,onLogout}){
   const recsRef=React.useRef([]);const timers=React.useRef({});
   const toast=m=>{setToastMsg(m);clearTimeout(timers.current.t);timers.current.t=setTimeout(()=>setToastMsg(''),2200);};
   React.useEffect(()=>{try{localStorage.setItem('tb.tab',tab);}catch(_){}},[tab]);
+  /* 휴대폰 뒤로가기 — 기록을 열면 기록 한 겹을 쌓아 두고, 뒤로가기는 앱을 나가지 않고 목록으로 돌아온다 */
+  const selRef=React.useRef(null);selRef.current=sel;const skipPop=React.useRef(false);
+  React.useEffect(()=>{
+    if(!mobile)return;
+    const open=!!sel&&tab==='rec';
+    const has=!!(window.history.state&&window.history.state.tbSel);
+    if(open&&!has)window.history.pushState({tbSel:1},'');
+    else if(!open&&has){skipPop.current=true;window.history.back();}
+  },[sel,tab,mobile]);
+  React.useEffect(()=>{
+    const pop=()=>{if(skipPop.current){skipPop.current=false;return;}if(selRef.current)setSel(null);};
+    window.addEventListener('popstate',pop);return()=>window.removeEventListener('popstate',pop);},[]);
   React.useEffect(()=>{TB.list().then(r=>{recsRef.current=r;setRecs(r);}).catch(e=>setLoadErr(e.message));
     DevRec.sweep().catch(()=>{});   /* 14일 지난 브라우저 보관 녹음 지우기 */
   },[]);
