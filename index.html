@@ -37815,8 +37815,12 @@ async function polishStream(src,opt={}){
   const ctx=(fx.topic?('\n이 녹취의 분야·주제: '+fx.topic):'')
     +(fx.fixes.length?('\n기계가 잘못 받아쓴 낱말(반드시 바로잡을 것): '
       +fx.fixes.map(f=>f.wrong+' → '+f.right).join(' · ')):'');
-  const segs=[];let prev='';
+  const segs=[];let prev='';let resume=opt.resume&&opt.resume.length?opt.resume:null;   /* 중단된 정리를 잇는다 — 앞에서 끝낸 조각은 다시 하지 않는다 */
   for(let s;(s=await q.next());){
+    const done=resume&&resume[segs.length];
+    if(done&&done.label===s.label&&done.ko){segs.push(done);prev=done.ko.slice(-300);
+      opt.onProgress&&opt.onProgress({korean,fx,segs:segs.slice()});continue;}
+    resume=null;
     opt.onStep&&opt.onStep((korean?'정리 ':'정리·번역 ')+(segs.length+1)+'번째 조각'+(s.label?' ('+s.label+')':''));
     const r=korean?await polishSegKo(s.text,{hint,ctx,prev}):await polishSegZh(s.text,{hint,ctx,prev,onStep:opt.onStep});
     segs.push({label:s.label,orig:r.orig,ko:r.ko});prev=r.ko.slice(-300);
@@ -37825,6 +37829,25 @@ async function polishStream(src,opt={}){
   if(!segs.length)throw new Error('정리할 글이 없습니다');
   const mm=await meetingMinutes(segs.map(s=>s.ko).join('\n\n'),{topic:fx.topic,onStep:opt.onStep});
   const res={korean,fx,segs,mm};res.md=segsMd(res);return res;
+}
+/* 정리 도중 끊긴 기록에서 이미 끝낸 조각 읽기 — 진행 줄(⏳)이 남아 있고 조각마다 시각 머리(####)가 있을 때만 */
+function parsePolished(md){
+  const sec=tbSection(md,'정리·번역')||tbSection(md,'정리');
+  if(!sec||!/⏳/.test(sec))return null;
+  const kor=/###\s*정리본 \(조각별\)/.test(sec);
+  const i=sec.search(/###\s*(?:번역 · 원문|정리본) \(조각별\)/);if(i<0)return null;
+  const blocks=sec.slice(i).split(/\n(?=#### )/).slice(1);
+  const segs=[];
+  for(const b of blocks){
+    const m=/^#### ([^\n]*)\n([\s\S]*)$/.exec(b);if(!m)return null;
+    const body=m[2].trim();
+    if(kor){if(!body)break;segs.push({label:m[1],orig:'',ko:body});continue;}
+    const k=body.search(/\n\n> /);if(k<0)break;
+    const ko=body.slice(0,k).trim(),orig=body.slice(k).trim().split('\n').map(l=>l.replace(/^>\s?/,'')).join('\n').trim();
+    if(!ko||/^\(이 부분 번역 실패/.test(ko))break;
+    segs.push({label:m[1],orig,ko});
+  }
+  return segs.length?{korean:kor,segs}:null;
 }
 /* 정리 절 본문: (회의록 머리) + 조각별 「시각 · 번역 / 원문(인용)」 */
 function segsMd({korean,fx,segs,mm,progress}){
@@ -37836,7 +37859,7 @@ function segsMd({korean,fx,segs,mm,progress}){
 /* 예전 이름 그대로 쓰는 곳(일정관리 앱 등)을 위해 남겨 둔다 — 결과는 정리 절 본문(마크다운) */
 async function polishTranscript(raw,opt={}){return (await polishStream(parseSegs(raw),opt)).md;}
 async function polishKorean(raw,opt={}){return polishTranscript(raw,{...opt,korean:true});}
-Object.assign(window,{polishTranscript,polishKorean,polishStream,polishSegZh,polishSegKo,parseSegs,segsMd,TbSegQueue,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
+Object.assign(window,{polishTranscript,polishKorean,polishStream,parsePolished,polishSegZh,polishSegKo,parseSegs,segsMd,TbSegQueue,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
 </script>
 <script type="text/babel">/* ── ZIP 만들기 (Word 파일 저장에 쓴다) ─────────────────────
    외부 라이브러리 없이 직접 구현했다. 압축 없이 저장(store)한다 */
@@ -37880,7 +37903,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.33';
+const TB_VERSION='v10.34';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38391,7 +38414,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   /* 정리하기 = 받아쓴 글이 이미 있으면 정리·번역만, 없으면 녹음 받아쓰기부터(녹음도 없으면 실시간 원문으로 정리) */
   const runTidy=rec=>{
     if(TB_JOBS.has(rec.id)){toast('이 기록은 이미 정리 중입니다 — 끝날 때까지 기다려 주세요');return;}
-    if(tbSection(rec.md,'녹취'))return runPolish(rec);
+    if(tbSection(rec.md,'녹취')&&!(/⏳ 받아쓰는 중/.test(rec.md)&&(audioRefs(rec.md).length||local.current[rec.id])))return runPolish(rec);
     if(audioRefs(rec.md).length||local.current[rec.id])return runStt(rec);
     return runPolish(rec);
   };
@@ -38477,7 +38500,9 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       /* 예전에 받아 둔 녹취에도 되풀이 걷어내기를 적용한다(다시 받아쓰지 않고 정리하기만 눌러도 깨끗하게) */
       const src=raw.replace(/^>\s*받아쓰기 모델:.*$/m,'').replace(/^>\s*⏳.*$/gm,'').trim().split(/\n{2,}/).map(p=>/^#/.test(p)?p.replace(/^(#{3,4}[^\n]*\n?)([\s\S]*)$/,(m,h,b)=>h+deLoop(b)):deLoop(p)).filter(Boolean).join('\n\n');
       const segs=parseSegs(src);const lng=rec.lang;let md0=rec.md;
-      const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean:lng==='ko'?true:undefined,
+      const pre=parsePolished(rec.md);   /* 정리 도중 끊긴 기록이면 끝낸 조각 뒤부터 이어서 */
+      if(pre)toast('끊긴 정리를 이어서 합니다 — '+pre.segs.length+'조각은 건너뜁니다');
+      const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean:pre?pre.korean:(lng==='ko'?true:undefined),resume:pre?pre.segs:null,
         onStep:m=>setBusy(m+' ('+pm+')'),onProgress:p=>{upd(rec.id,{md:putPolish(md0,p,pm,segs.length)});}});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
       upd(rec.id,{md:putPolish(md0,out,pm,segs.length)});
