@@ -36864,7 +36864,7 @@ const LIVE_JOIN_MS=2500;const LIVE_JOIN_MS_HYB=4000;   /* 동시통역+정리는
 const LIVE_JOIN_MAX=160;             /* 이 길이를 넘으면 기다리지 않고 바로 번역 */
 const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
 const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 문장이 끝나면 자막'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'},
-  {id:'hyb',label:'⚡🎯 동시통역+정리',desc:'왼쪽: 동시통역 자막이 바로 · 오른쪽: 받아쓰기+번역으로 검증한 내용을 한국어 개조식 요점으로 쌓고, 쌓이면 소제목·테마로 묶음 · 소리를 두 곳에 보내 비용이 조금 더 듦 (관리자 시험용, v10.54)',admin:true}];
+  {id:'hyb',label:'⚡🎯 동시통역+정리',desc:'왼쪽: 동시통역 자막이 바로 · 오른쪽: 받아쓰기+번역으로 검증한 내용을 한국어 개조식 요점으로 쌓고, 쌓이면 소제목·테마로 묶음'}];   /* v10.59부터 기본이자 유일한 방식(한국어는 받아쓰기만) */
 const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate (최신)'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'},{id:'qwen3-livetranslate-flash-realtime',label:'Qwen3 LiveTranslate'}];
 const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기 (최신)'},{id:'qwen-audio-3.0-asr-flash-streaming',label:'Qwen-Audio 3.0 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
 const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'qwen3.5-flash',label:'번역 Qwen3.5-Flash (Alibaba · 빠름·아주 저렴)'},{id:'qwen3.5-plus',label:'번역 Qwen3.5-Plus (Alibaba · 중국어에 강함)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
@@ -37397,7 +37397,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
   const mobile=useMobile();
   const [,force]=React.useReducer(x=>x+1,0);
   const calLang=LIVE.cal&&LIVE_LANGS.some(l=>l.id===LIVE.cal.lang)?LIVE.cal.lang:'';
-  const [opt,setOpt]=React.useState(()=>({mode:calLang==='ko'?'asr':(Store.cfg.liveMode||'asr'),model:Store.cfg.liveModel||LIVE_MODELS[0].id,
+  const [opt,setOpt]=React.useState(()=>({mode:(calLang||Store.cfg.liveFrom||'zh')==='ko'?'asr':'hyb',   /* v10.59: 동시통역+정리로 고정(한국어는 받아쓰기만) */model:Store.cfg.liveModel||LIVE_MODELS[0].id,
     asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,
     from:calLang||Store.cfg.liveFrom||'zh',mix:false,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
   const [showZh,setShowZh]=React.useState(!!Store.cfg.liveShowZh);   /* 동시통역 칸 원문 보기(v10.55) */
@@ -37463,7 +37463,6 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
   const status=!sess?'대기':sess.running?(sess.active&&sess.active.ready?'통역 중':'연결 중…'):'멈춤';
   const sel={...inputStyle,width:'auto',padding:'4px 6px',fontSize:'var(--fs-sm2)'};
   const saved=LIVE.saved&&(db.notes||[]).find(n=>n.id===LIVE.saved.id);
-  const modeDesc=(LIVE_MODES.find(m=>m.id===opt.mode)||{}).desc;
   /* 시작·정지 단추 — 휴대폰에서는 오른쪽(엄지가 닿는 쪽)에 */
   const runBtn=running
       ?<Button variant="danger" onClick={stop}>■ 정지</Button>
@@ -37480,18 +37479,14 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       {sess&&sess.opt.record!==false&&running&&<span style={{color:'var(--color-danger)'}}>● 녹음</span>}
       {mobile&&runBtn}</span>}>
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6}}>
-      <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
-        {LIVE_MODES.filter(m=>!m.admin||owner||opt.mode===m.id).map(m=><button key={m.id} type="button" disabled={running||opt.from==='ko'} onClick={()=>set(m.id==='live'?{mode:m.id,mix:false}:{mode:m.id})} title={opt.from==='ko'?'한국어는 받아쓰기(정확도 우선)만 씁니다':m.desc}
-          style={{border:'none',borderRadius:4,padding:'4px 10px',fontSize:'var(--fs-sm2)',fontWeight:opt.mode===m.id?600:500,background:opt.mode===m.id?'var(--surface-active)':'transparent',
-            color:opt.mode===m.id?'var(--text-body)':'var(--text-muted)',cursor:running?'default':'pointer',fontFamily:'inherit'}}>{m.label}</button>)}</span>
-      <select style={sel} disabled={running} value={opt.from} onChange={e=>set(e.target.value==='ko'?{from:'ko',mode:'asr',mix:false}:{from:e.target.value})}>{LIVE_LANGS.map(l=><option key={l.id} value={l.id}>{l.id==='ko'?'한국어 (받아쓰기만)':l.label}</option>)}</select>
+      {/* v10.59: 방식은 동시통역+정리로 고정(한국어는 받아쓰기만) — 단추 없음 */}
+      <select style={sel} disabled={running} value={opt.from} onChange={e=>set(e.target.value==='ko'?{from:'ko',mode:'asr',mix:false}:{from:e.target.value,mode:'hyb',mix:false})}>{LIVE_LANGS.map(l=><option key={l.id} value={l.id}>{l.id==='ko'?'한국어 (받아쓰기만)':l.label}</option>)}</select>
       <span style={{fontSize:'var(--fs-sm2)'}}>{opt.from==='ko'?'→ 받아쓰기':'→ 한국어'}</span>
       {devs.length>1&&<select style={{...sel,maxWidth:190}} disabled={running} value={opt.device} onChange={e=>set({device:e.target.value})}>
         <option value="">기본 마이크</option>{devs.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'마이크'}</option>)}</select>}
     </div>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6,display:'flex',flexWrap:'wrap',gap:'4px 12px',alignItems:'center'}}>
-      <span>{modeDesc}</span>
-      <span style={{color:'var(--text-label)'}}>· 모델: {opt.mode==='live'?modelName(opt.model):modelName(opt.asrModel)+' + '+modelName(opt.trModel)+(opt.mode==='hyb'?' · 동시통역 '+modelName(opt.model):'')}</span>
+      <span style={{color:'var(--text-label)'}}>모델: {opt.mode==='live'?modelName(opt.model):modelName(opt.asrModel)+' + '+modelName(opt.trModel)+(opt.mode==='hyb'?' · 동시통역 '+modelName(opt.model):'')}</span>
       <label style={{cursor:'pointer'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 회의록까지 만듭니다"><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
       {opt.record&&<RecDirBtn disabled={running}/>}
       {/* 고급(서버 주소) 메뉴는 없앴다 — 기본 주소(싱가포르)만 쓴다 */}
@@ -38227,7 +38222,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.58';
+const TB_VERSION='v10.59';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
