@@ -37050,7 +37050,7 @@ class LiveSession{
     try{if(navigator.wakeLock)this.lock=await navigator.wakeLock.request('screen');}catch(_){}
     try{KeepAwake.hold(this);}catch(_){}
     await this.connect();
-    if(this.opt.mode==='hyb')this.connectPv();   /* 미리보기 줄용 동시통역 연결(v10.45) */
+    if(this.opt.mode==='hyb'&&this.opt.from!=='ko')this.connectPv();   /* 미리보기 줄용 동시통역 연결(v10.45) · 한국어는 받아쓰기 흐름이 곧 왼쪽 자막(v10.61) */
     this.rot=setInterval(()=>this.rotate(),1000);   /* 교대는 때가 되면 문장 사이에서(rotate) */
   }
   /* 마이크 + 16kHz 변환 그래프. 홈 화면 등으로 나갔다 오면 다시 붙인다 */
@@ -37131,12 +37131,17 @@ class LiveSession{
     const prev=all.slice(Math.max(0,i-5),i).map(x=>'- '+x.zh+(x.ko?'\n  → '+x.ko:'')).join('\n');
     const hint=String(Store.cfg.sttHint||'').trim();
     /* 한국어도 섞임: 한국어 발화(통역사 등)는 번역하지 않고 그대로 자막에 */
-    if((this.opt.mix&&liveIsKo(g.zh))||this.opt.from==='ko'){g.ko=g.zh.trim();g.koS='';g.koDone=true;g.kr=true;g.doneAt=Date.now();this.pvCover(g);this.bump();this.paraTick();return;}
-    g.koS='번역 중…';this.bump();const n=++this.trN;
+    if(this.opt.mix&&liveIsKo(g.zh)){g.ko=g.zh.trim();g.koS='';g.koDone=true;g.kr=true;g.doneAt=Date.now();this.pvCover(g);this.bump();this.paraTick();return;}
+    const ko=this.opt.from==='ko';   /* v10.61: 한국어도 같은 흐름 — 번역 대신 받아쓰기 교정(잘못 들은 용어·숫자·띄어쓰기) */
+    g.koS=ko?'교정 중…':'번역 중…';this.bump();const n=++this.trN;
     /* 동시통역+검증(v10.50): 동시통역 초벌이 다 들어올 때까지 잠깐(최대 2초) 기다렸다가 초벌을 함께 준다 — 검증은 초벌을 바탕으로 틀린 데만 고친다 */
     /* v10.55: 초벌은 프롬프트에 넣지 않는다 — 모델이 초벌(경계가 달라 앞부분뿐)을 베끼고 뒷부분을 빼먹어 내용이 잘렸다. 초벌은 검증이 실패했을 때 살리는 용도로만 */
     const draft=this.opt.mode==='hyb'?this.pvDraft(g):'';
-    const system='너는 석유화학 회사 회의의 실시간 통역사다. '+langLabel(this.opt.from)+' 발화를 한국어 자막으로 옮긴다.\n'
+    const system=ko?'너는 석유화학 회사 회의의 속기사다. 한국어 발화의 자동 받아쓰기 글을 교정해 자막으로 낸다.\n'
+      +'- 출력 형식: 첫 줄 「번역: 」 뒤에 교정한 문장 전체(내용은 그대로, 잘못 들은 낱말·용어·숫자·띄어쓰기·맞춤표만 바로잡는다). 고친 낱말이 있으면 맨 마지막 줄에만 「교정: 잘못→바로, 잘못→바로」, 없으면 「교정: 없음」. 교정 줄 뒤에는 아무것도 쓰지 않는다\n'
+      +'- 요약·생략·보충·설명·따옴표는 하지 않는다. 발화 전체를 처음부터 끝까지 그대로 옮긴다\n- 인명·회사명·지명·숫자·단위는 발음대로 가장 그럴듯한 표기로\n- 문장이 중간에 끊겼으면 끊긴 대로 둔다'
+      +(hint?'\n\n자주 나오는 용어: '+hint:'')
+    :'너는 석유화학 회사 회의의 실시간 통역사다. '+langLabel(this.opt.from)+' 발화를 한국어 자막으로 옮긴다.\n'
       +'- 출력 형식: 첫 줄 「번역: 」 뒤에 한국어 자막 전체. 받아쓰기가 잘못 들은 낱말(동음이의·용어)이 있으면 맨 마지막 줄에만 「교정: 잘못→바로, 잘못→바로」로 적고, 없으면 「교정: 없음」. 교정 줄 뒤에는 아무것도 쓰지 않는다\n'
       +'- 설명·따옴표·다른 말은 쓰지 않는다\n'
       +'- 인명·회사명·지명은 한국어 발음으로 적는다\n- 숫자·단위·가격·수량은 정확히\n'
@@ -37145,16 +37150,17 @@ class LiveSession{
       +(hint?'\n\n자주 나오는 용어: '+hint:'');
     const prompt=(prev?'앞선 발화(참고용):\n'+prev+'\n\n':'')+'이번 발화'+(g.cut?'(중간에 끊긴 조각)':'')+':\n'+g.zh;
     try{
-      const out=await liveAsk(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:liveMaxTok(g.zh),usageTag:'통역 번역'},m=>{g.koS=m;this.bump();});
+      const out=await liveAsk(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:liveMaxTok(g.zh),usageTag:ko?'통역 교정':'통역 번역'},m=>{g.koS=m;this.bump();});
       let r=liveParse(out);
       /* v10.55: 답이 원문에 비해 너무 짧으면(잘림) 한 번 더 — 그래도 짧으면 긴 쪽을 쓴다 */
       if(liveShort(g.zh,r.ko)){this.log('번역 #'+n+' 짧음('+r.ko.length+'/'+g.zh.length+') — 다시');
-        const out2=await liveAsk(prompt+'\n\n(주의: 발화 전체를 끝까지 빠짐없이 옮길 것)',{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:liveMaxTok(g.zh),usageTag:'통역 번역'});
+        const out2=await liveAsk(prompt+'\n\n(주의: 발화 전체를 끝까지 빠짐없이 옮길 것)',{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:liveMaxTok(g.zh),usageTag:ko?'통역 교정':'통역 번역'});
         const r2=liveParse(out2);if(r2.ko.length>r.ko.length)r=r2;}
       g.ko=r.ko;g.koS='';
+      if(!g.ko&&ko){g.ko=g.zh.trim();this.log('교정 #'+n+' 답이 비어 받아쓴 글 그대로');}
       if(draft&&!g.ko){g.ko=draft;this.log('번역 #'+n+' 답이 비어 동시통역 글 사용');}
       if(r.pairs.length){const z=liveFix(g.zh,r.pairs);if(z!==g.zh){g.raw=g.raw||g.zh;g.zh=z;}}
-    }catch(e){if(draft){g.ko=draft;g.koS='';g.fromLive=true;this.log('번역 실패 #'+n+'(동시통역 글로 대신): '+(e.message||e));}else{g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}}
+    }catch(e){if(ko){g.ko=g.zh.trim();g.koS='';this.log('교정 실패 #'+n+'(받아쓴 글 그대로): '+(e.message||e));}else if(draft){g.ko=draft;g.koS='';g.fromLive=true;this.log('번역 실패 #'+n+'(동시통역 글로 대신): '+(e.message||e));}else{g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}}
     g.koDone=true;g.doneAt=Date.now();this.pvCover(g);
     this.bump();this.paraTick();this.noteTick();
   }
@@ -37176,7 +37182,7 @@ class LiveSession{
       +'- 문장이 중간에 끊겨 있어도 「발언 이어짐」「중단」 같은 메모는 절대 쓰지 않는다. 내용이 모자라면 그 부분은 적지 않는다\n- 설명·제목·다른 말은 쓰지 않는다'
       +(hint?'\n\n자주 나오는 용어: '+hint:'');
     const t1=this.t0+((run[0].t||0)*1000)+1000,t2=(run[run.length-1].endAt||Date.now())+3000;const live=this.pvBetween(t1,t2);
-    const prompt=(prev?'앞선 요점(참고용, 다시 적지 않음):\n'+prev+'\n\n':'')+'이번 발화(한국어 번역):\n'+run.map(g=>g.ko.trim()).join('\n')+(live?'\n\n동시통역 참고(검증 전, 빈 자리 채우기용):\n'+live:'');
+    const prompt=(prev?'앞선 요점(참고용, 다시 적지 않음):\n'+prev+'\n\n':'')+(this.opt.from==='ko'?'이번 발화(교정한 받아쓰기):\n':'이번 발화(한국어 번역):\n')+run.map(g=>g.ko.trim()).join('\n')+(live?'\n\n동시통역 참고(검증 전, 빈 자리 채우기용):\n'+live:'');
     try{
       const out=await liveAsk(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:600,usageTag:'통역 요점'});
       const lines=liveClean(out).split('\n').map(x=>x.trim()).filter(x=>/^[-•·▪]\s*\S/.test(x)).map(x=>x.replace(/^[-•·▪]\s*/,'').replace(/^번역\s*[:：]\s*/,''));
@@ -37216,7 +37222,7 @@ class LiveSession{
   /* 오른쪽 칸·기록용 — 묶인 소제목들 + 아직 안 묶인 요점 */
   get outline(){return {sections:this.sections,loose:this.groupLeft().map(n=>n.text)};}
   /* 검증 문장이 나오면, 그 문장이 끝나기 전에 시작된 동시통역 칸들을 치운다(v10.47) — 검증 칸이 같은 자리에 들어가 구조가 유지된다 */
-  get pvState(){if(this.pvActive&&this.pvActive.ready)return '';if(this.pvFails>=3)return '동시통역 연결 안 됨 — 로그 참고';return '동시통역 연결 중…';}
+  get pvState(){if(this.opt.from==='ko')return '';if(this.pvActive&&this.pvActive.ready)return '';if(this.pvFails>=3)return '동시통역 연결 안 됨 — 로그 참고';return '동시통역 연결 중…';}
   /* 이 문장이 끝나기 전에 시작된 동시통역 칸들 — 동시통역은 문장 끝 신호를 드물게 주어 한 칸이 길게 이어질 수 있으므로 글자 위치(covLen)로 가린다(v10.50) */
   pvBlocks(g){const lim=(g.endAt||Date.now())+1000;return this.pvs.flatMap(c=>c.segs).filter(b=>!b.cov&&b.at0&&b.at0<lim);}
   /* 시각 구간 [t1,t2](ms)에 들어온 동시통역 글(v10.56) — 받아쓰기가 조각 경계에서 떨어뜨린 말을 요점 정리 때 메우는 데 쓴다 */
@@ -37297,7 +37303,8 @@ class LiveSession{
     this.waitN=wait.length;
     return out;}
   /* 동시통역 자막(왼쪽 칸, v10.53) — 동시통역 연결들의 문장 그대로 */
-  get liveSegs(){return this.pvs.flatMap(c=>c.segs).filter(g=>g.zh||g.zhS||g.ko||g.koS);}
+  get liveSegs(){if(this.opt.from==='ko')return this.segs.filter(g=>g.zh||g.zhS).map(g=>({ko:g.zh||'',koS:g.zhS||'',zh:'',zhS:''}));   /* 한국어: 받아쓰기 흐름이 곧 왼쪽 자막(v10.61) */
+    return this.pvs.flatMap(c=>c.segs).filter(g=>g.zh||g.zhS||g.ko||g.koS);}
   /* 미리보기 연결(v10.45): 같은 소리를 동시통역 모델에도 보내 번역을 화면 아래 회색 줄에 바로 보여 준다. 기록에는 안 남는다 */
   async connectPv(){
     const c=new LiveConn(this,'P'+(++this.pvN),true);this.pvs.push(c);this.pvPending=c;
@@ -37373,14 +37380,14 @@ class LiveSession{
   toMarkdown(title,audioLinks){
     const segs=this.segs.filter(g=>(g.zh||g.ko).trim());
     const how=(this.opt.mode==='asr'?'정확도 우선 ('+modelName(this.opt.asrModel)+' 받아쓰기 + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 번역)'
-      :this.opt.mode==='hyb'?'동시통역+정리 ('+modelName(this.opt.asrModel)+' 받아쓰기 + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 검증 · 동시통역 '+modelName(this.opt.model)+')':'속도 우선 ('+modelName(this.opt.model)+')')
+      :this.opt.mode==='hyb'?(this.opt.from==='ko'?'받아쓰기+정리 ('+modelName(this.opt.asrModel)+' 받아쓰기 + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 교정)':'동시통역+정리 ('+modelName(this.opt.asrModel)+' 받아쓰기 + '+modelName(this.opt.trModel||LIVE_TR_MODELS[0].id)+' 검증 · 동시통역 '+modelName(this.opt.model)+')'):'속도 우선 ('+modelName(this.opt.model)+')')
       +(this.opt.file?' · 파일 시험: '+this.opt.file.name:'');
     /* 번역(굵게) 아래 원문 한 줄 — 빈 줄로 문장 단위를 나눈다 */
-    const pair=g=>'**'+(((g.ko||'').trim()||'(번역 없음)').replace(/\*/g,''))+'**'+(g.kr?'':'\n'+(g.zh||g.zhS).trim());   /* 한국어 발화는 원문 줄 없이 */
+    const pair=g=>'**'+(((g.ko||'').trim()||'(번역 없음)').replace(/\*/g,''))+'**'+(g.kr||this.opt.from==='ko'?'':'\n'+(g.zh||g.zhS).trim());   /* 한국어 발화는 원문 줄 없이 */
     const paraMd=p=>p.bullets?'**'+(p.title||'').replace(/\*/g,'')+'**\n'+p.bullets.map(b=>'- '+b).join('\n')+'\n'+p.zh:'**'+p.ko.replace(/\*/g,'')+'**\n'+p.zh;
     const pairs=this.items.filter(it=>it.para||(it.seg&&(it.seg.zh||it.seg.ko).trim())).map(it=>it.para?paraMd(it.para):pair(it.seg)).join('\n\n');
     const raw=segs.map(g=>(g.zh||g.zhS).trim()).filter(Boolean).join('\n');
-    const live=this.opt.mode==='hyb'?this.liveSegs.map(g=>(g.ko||'').trim()).filter(Boolean).join('\n'):'';
+    const live=this.opt.mode==='hyb'&&this.opt.from!=='ko'?this.liveSegs.map(g=>(g.ko||'').trim()).filter(Boolean).join('\n'):'';
     const ol=this.opt.mode==='hyb'?this.outline:null;
     const outline=ol?[...ol.sections.map(sc=>(sc.title?'**'+sc.title.replace(/\*/g,'')+'**\n':'')+sc.bullets.map(b=>'- '+b).join('\n')),...(ol.loose.length?[ol.loose.map(b=>'- '+b).join('\n')]:[])].join('\n\n'):'';
     return '# '+title+'\n\n> 🗣 실시간 통역 · '+langLabel(this.opt.from)+(this.opt.mix?'+한국어':'')+(this.opt.from==='ko'?' 받아쓰기':' → 한국어')+' · 약 '+this.minutes+'분 · '+how+'\n\n'
@@ -37397,7 +37404,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
   const mobile=useMobile();
   const [,force]=React.useReducer(x=>x+1,0);
   const calLang=LIVE.cal&&LIVE_LANGS.some(l=>l.id===LIVE.cal.lang)?LIVE.cal.lang:'';
-  const [opt,setOpt]=React.useState(()=>({mode:(calLang||Store.cfg.liveFrom||'zh')==='ko'?'asr':'hyb',   /* v10.59: 동시통역+정리로 고정(한국어는 받아쓰기만) */model:Store.cfg.liveModel||LIVE_MODELS[0].id,
+  const [opt,setOpt]=React.useState(()=>({mode:'hyb',   /* v10.59: 동시통역+정리로 고정 · v10.61: 한국어도 같은 흐름(받아쓰기 자막 → 교정 → 개조식) */model:Store.cfg.liveModel||LIVE_MODELS[0].id,
     asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,
     from:calLang||Store.cfg.liveFrom||'zh',mix:false,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
   const [showZh,setShowZh]=React.useState(!!Store.cfg.liveShowZh);   /* 동시통역 칸 원문 보기(v10.55) */
@@ -37419,7 +37426,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     if(opt.record&&!file)DevRec.prepare();
     if(window.CONV&&CONV.sess&&CONV.sess.running){toast('💬 대화 탭이 켜져 있습니다 — 먼저 정지하세요');return;}
     Store.saveCfg({liveMode:opt.mode,liveModel:opt.model,liveAsrModel:opt.asrModel,liveTrModel:opt.trModel,liveFrom:opt.from,liveMix:!!opt.mix,liveHost:opt.host,liveClean:opt.clean,liveRecord:opt.record});
-    const s=new LiveSession({...opt,file,...(opt.from==='ko'?{mode:'asr',mix:false}:{})},force);LIVE.sess=s;LIVE.saved=null;force();   /* 한국어는 받아쓰기만(번역 없음) */
+    const s=new LiveSession({...opt,file,mode:'hyb',mix:false},force);LIVE.sess=s;LIVE.saved=null;force();
     if(file){s.onFileEnd=()=>{if(LIVE.sess===s&&s.running)stop();};toast('파일을 실제 속도로 흘려 넣습니다 — 끝나면 자동으로 정지·저장돼요');}
     try{await s.start();tbPost({state:'live'});}
     catch(e){s.stop(true);s.err=/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message;force();}
@@ -37480,7 +37487,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       {mobile&&runBtn}</span>}>
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6}}>
       {/* v10.59: 방식은 동시통역+정리로 고정(한국어는 받아쓰기만) — 단추 없음 */}
-      <select style={sel} disabled={running} value={opt.from} onChange={e=>set(e.target.value==='ko'?{from:'ko',mode:'asr',mix:false}:{from:e.target.value,mode:'hyb',mix:false})}>{LIVE_LANGS.map(l=><option key={l.id} value={l.id}>{l.id==='ko'?'한국어 (받아쓰기만)':l.label}</option>)}</select>
+      <select style={sel} disabled={running} value={opt.from} onChange={e=>set({from:e.target.value,mode:'hyb',mix:false})}>{LIVE_LANGS.map(l=><option key={l.id} value={l.id}>{l.id==='ko'?'한국어 (받아쓰기만)':l.label}</option>)}</select>
       <span style={{fontSize:'var(--fs-sm2)'}}>{opt.from==='ko'?'→ 받아쓰기':'→ 한국어'}</span>
       {devs.length>1&&<select style={{...sel,maxWidth:190}} disabled={running} value={opt.device} onChange={e=>set({device:e.target.value})}>
         <option value="">기본 마이크</option>{devs.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'마이크'}</option>)}</select>}
@@ -37501,7 +37508,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       <Button variant="gray" size="sm" onClick={()=>onOpenNote(saved.id,false)}>기록 열기</Button>
       <Button variant="ghost" size="sm" onClick={reset}>화면 비우기</Button></div>}
     {(()=>{
-      const hyb=sess&&sess.opt.mode==='hyb';const liveSegs=hyb?sess.liveSegs:[];
+      const hyb=sess&&sess.opt.mode==='hyb';const liveSegs=hyb?sess.liveSegs:[];const isKo=sess&&sess.opt.from==='ko';
       const boxStyle={overflowY:'auto',border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 12px',background:'#fff'};
       const h=mobile?'calc(100vh - 360px)':'calc(100vh - 380px)';
       const empty=<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>
@@ -37518,12 +37525,12 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
         style={{...boxStyle,height:hyb&&mobile?'38vh':h,minHeight:hyb&&mobile?180:260}}>
         {hyb?(()=>{const ol=sess.outline;const none=!ol.sections.length&&!ol.loose.length;const ul={margin:'4px 0 0',paddingLeft:18,fontSize:'var(--fs-md)',lineHeight:1.55,color:'var(--text-body)'};
           return <>
-            {none&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:40,lineHeight:1.8,fontSize:'var(--fs-sm2)'}}>{running?'정리 중 — 받아쓰기·번역으로 검증한 내용이 요점으로 쌓이고, 쌓이면 소제목으로 묶입니다':'받아쓰기+번역으로 검증한 내용의 개조식 정리'}</div>}
+            {none&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:40,lineHeight:1.8,fontSize:'var(--fs-sm2)'}}>{isKo?(running?'정리 중 — 받아쓰기를 교정한 내용이 요점으로 쌓이고, 쌓이면 소제목으로 묶입니다':'받아쓰기를 교정한 내용의 개조식 정리'):(running?'정리 중 — 받아쓰기·번역으로 검증한 내용이 요점으로 쌓이고, 쌓이면 소제목으로 묶입니다':'받아쓰기+번역으로 검증한 내용의 개조식 정리')}</div>}
             {ol.sections.map((sc,i)=><div key={'s'+i} style={{padding:'8px 0',borderBottom:'1px dashed var(--border-default)'}} title={sc.err?'묶기에 실패해 요점을 그대로 두었습니다':''}>
               {sc.title&&<div style={{fontSize:'var(--fs-md)',fontWeight:700,lineHeight:1.5,color:'var(--text-body)'}}>{sc.title}</div>}
               <ul style={ul}>{sc.bullets.map((b,k)=><li key={k}>{b}</li>)}</ul></div>)}
             {ol.loose.length>0&&<div style={{padding:'8px 0'}}><ul style={ul}>{ol.loose.map((b,k)=><li key={k}>{b}</li>)}</ul></div>}
-            {running&&(sess.waitN>0||sess.noteLeft().length>0||sess.noteBusy)&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',padding:'6px 0'}}>{sess.noteBusy||sess.noteLeft().length?'요점 정리 중…':'검증 중 '+sess.waitN+'문장…'}</div>}
+            {running&&(sess.waitN>0||sess.noteLeft().length>0||sess.noteBusy)&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',padding:'6px 0'}}>{sess.noteBusy||sess.noteLeft().length?'요점 정리 중…':(isKo?'교정 중 ':'검증 중 ')+sess.waitN+'문장…'}</div>}
             {sess.groupBusy&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',padding:'2px 0'}}>소제목으로 묶는 중…</div>}
           </>;})()
         :<>{!items.length&&empty}{items.map((it,i)=>it.para?paraRow(it.para,i,true):segRow(it.seg,i,true))}</>}
@@ -37541,9 +37548,9 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
           </div>);})()}
       </div>;
       return <div style={{display:'grid',gridTemplateColumns:mobile?'1fr':'minmax(0,2fr) minmax(0,1fr)',gap:10,alignItems:'start'}}>
-        <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>⚡ 동시통역</span>
-          <label style={{cursor:'pointer'}} title="동시통역 덩어리마다 받아쓴 원문을 작게 함께 보여 줍니다"><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label></div>{live}</div>
-        <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3}}>🎯 검증·정리{running&&sess.pvFails>=3?'':''}</div>{verified}</div>
+        <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>{isKo?'⚡ 실시간 받아쓰기':'⚡ 동시통역'}</span>
+          {!isKo&&<label style={{cursor:'pointer'}} title="동시통역 덩어리마다 받아쓴 원문을 작게 함께 보여 줍니다"><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label>}</div>{live}</div>
+        <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3}}>{isKo?'🎯 교정·정리':'🎯 검증·정리'}</div>{verified}</div>
       </div>;})()}
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
       <span>소리는 Alibaba(싱가포르)로{opt.mode!=='live'?(isQwen(opt.trModel)?', 받아쓴 글도 Alibaba(Qwen)로':', 받아쓴 글은 Anthropic(Claude)으로'):''} 전송됩니다 · 다른 메뉴로 옮겨도 통역은 계속됩니다</span>
@@ -38222,7 +38229,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.60';
+const TB_VERSION='v10.61';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
