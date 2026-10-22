@@ -36864,7 +36864,7 @@ const LIVE_JOIN_MS=2500;             /* 문장 끝 부호 없이 끝난 조각�
 const LIVE_JOIN_MAX=160;             /* 이 길이를 넘으면 기다리지 않고 바로 번역 */
 const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
 const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 문장이 끝나면 자막'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'},
-  {id:'hyb',label:'⚡🎯 동시통역+검증',desc:'동시통역 글이 맨 아래에 바로 뜨고, 받아쓰기+번역으로 검증된 문장이 나오면 그 자리에서 바뀜 · 완성 문장 5개가 모이면 문단으로 · 소리를 두 곳에 보내 비용이 조금 더 듦 (관리자 시험용, v10.46)',admin:true}];
+  {id:'hyb',label:'⚡🎯 동시통역+검증',desc:'동시통역 글이 회색 칸으로 바로 뜨고, 받아쓰기+번역으로 검증된 문장이 나오면 그 칸이 검정으로 바뀜 · 완성 문장 5개가 모이면 문단으로 · 소리를 두 곳에 보내 비용이 조금 더 듦 (관리자 시험용, v10.47)',admin:true}];
 const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate (최신)'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'},{id:'qwen3-livetranslate-flash-realtime',label:'Qwen3 LiveTranslate'}];
 const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기 (최신)'},{id:'qwen-audio-3.0-asr-flash-streaming',label:'Qwen-Audio 3.0 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
 const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'qwen3.5-flash',label:'번역 Qwen3.5-Flash (Alibaba · 빠름·아주 저렴)'},{id:'qwen3.5-plus',label:'번역 Qwen3.5-Plus (Alibaba · 중국어에 강함)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
@@ -36970,8 +36970,8 @@ class LiveConn{
     if(t==='conversation.item.input_audio_transcription.completed'){this.si++;return;}
     if(/^response\.text\./.test(t))this.textOut=true;
     if(/^response\.audio_transcript\./.test(t)&&this.textOut)return;
-    if(t==='response.text.delta'||t==='response.audio_transcript.delta'){const g=this.seg(this.ti);g.ko+=ev.delta||'';g.koS='';g.at=Date.now();s.bump();return;}
-    if(t==='response.text.text'||t==='response.audio_transcript.text'){const g=this.seg(this.ti);g.ko=liveMerge(g.ko,ev.text||ev.delta||'');g.koS=ev.stash||'';g.at=Date.now();s.bump();return;}
+    if(t==='response.text.delta'||t==='response.audio_transcript.delta'){const g=this.seg(this.ti);if(!g.at0)g.at0=Date.now();g.ko+=ev.delta||'';g.koS='';g.at=Date.now();s.bump();return;}
+    if(t==='response.text.text'||t==='response.audio_transcript.text'){const g=this.seg(this.ti);if(!g.at0)g.at0=Date.now();g.ko=liveMerge(g.ko,ev.text||ev.delta||'');g.koS=ev.stash||'';g.at=Date.now();s.bump();return;}
     if(t==='response.text.done'||t==='response.audio_transcript.done'){const g=this.seg(this.ti);g.ko=ev.text||ev.transcript||g.ko;g.koS='';g.koDone=true;g.at=Date.now();this.ti++;s.bump();return;}
   }
   handle(ev){
@@ -36991,7 +36991,7 @@ class LiveConn{
     /* qwen3.8: 원문·번역이 조각(delta)으로 온다 */
     if(t==='conversation.item.input_audio_transcription.delta'){const g=this.seg(this.si);g.zh+=ev.delta||'';s.bump();return;}
     if(t==='conversation.item.input_audio_transcription.text'){const g=this.seg(this.si);g.zh=liveMerge(g.zh,ev.text||'');g.zhS=ev.stash||'';s.bump();return;}
-    if(t==='conversation.item.input_audio_transcription.completed'){let g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;this.si++;
+    if(t==='conversation.item.input_audio_transcription.completed'){let g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;g.endAt=Date.now();this.si++;
       if(this.asr){
         /* v10.38: 앞 조각이 문장 끝 부호 없이 끝나 기다리는 중이면 이 조각을 거기에 이어 붙인다(침묵 길이로 잘린 문장을 다시 한 문장으로) */
         const prev=this.segs[this.si-2];
@@ -37109,7 +37109,7 @@ class LiveSession{
     const prev=all.slice(Math.max(0,i-5),i).map(x=>'- '+x.zh+(x.ko?'\n  → '+x.ko:'')).join('\n');
     const hint=String(Store.cfg.sttHint||'').trim();
     /* 한국어도 섞임: 한국어 발화(통역사 등)는 번역하지 않고 그대로 자막에 */
-    if(this.opt.mix&&liveIsKo(g.zh)){g.ko=g.zh.trim();g.koS='';g.koDone=true;g.kr=true;g.doneAt=Date.now();this.pvMark=this.pvAll.length;this.bump();this.paraTick();return;}
+    if(this.opt.mix&&liveIsKo(g.zh)){g.ko=g.zh.trim();g.koS='';g.koDone=true;g.kr=true;g.doneAt=Date.now();this.pvCover(g);this.bump();this.paraTick();return;}
     g.koS='번역 중…';this.bump();const n=++this.trN;
     const system='너는 석유화학 회사 회의의 실시간 통역사다. '+langLabel(this.opt.from)+' 발화를 한국어 자막으로 옮긴다.\n'
       +'- 출력 형식: 첫 줄 「번역: 」 뒤에 한국어 자막 전체. 받아쓰기가 잘못 들은 낱말(동음이의·용어)이 있으면 맨 마지막 줄에만 「교정: 잘못→바로, 잘못→바로」로 적고, 없으면 「교정: 없음」. 교정 줄 뒤에는 아무것도 쓰지 않는다\n'
@@ -37123,9 +37123,12 @@ class LiveSession{
       const r=liveParse(out);g.ko=r.ko;g.koS='';
       if(r.pairs.length){const z=liveFix(g.zh,r.pairs);if(z!==g.zh){g.raw=g.raw||g.zh;g.zh=z;}}
     }catch(e){g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}
-    g.koDone=true;g.doneAt=Date.now();this.pvMark=this.pvAll.length;   /* 검증된 문장이 나왔으니 그만큼의 동시통역 글은 치운다(v10.46) */
+    g.koDone=true;g.doneAt=Date.now();this.pvCover(g);
     this.bump();this.paraTick();
   }
+  /* 검증 문장이 나오면, 그 문장이 끝나기 전에 시작된 동시통역 칸들을 치운다(v10.47) — 검증 칸이 같은 자리에 들어가 구조가 유지된다 */
+  pvCover(g){if(this.opt.mode!=='hyb')return;const lim=(g.endAt||Date.now())+1000;
+    for(const c of this.pvs)for(const b of c.segs)if(!b.cov&&b.at0&&b.at0<lim)b.cov=true;}
   /* 문단 다듬기(v10.37) — 문장 자막은 먼저 띄우고, 그 틈에 끝난 문장 몇 개를 묶어 원문·번역을 한 문단으로 다시 다듬는다.
      한 번에 하나만, 문장 번역이 돌고 있으면 기다린다. 밀리면 최대 12문장을 한 번에 */
   /* 파일로 시험(v10.44, 관리자): 마이크 대신 녹음 파일을 실제 속도로 흘려 넣는다 — 같은 소리로 방식을 비교하기 위해 */
@@ -37180,14 +37183,14 @@ class LiveSession{
   get items(){const out=[];const seen=new Set();const hyb=this.opt.mode==='hyb';const wait=[];
     for(const g of this.segs){const p=g.para;
       if(p&&p.done){if(!seen.has(p)){seen.add(p);out.push({para:p});}}
-      else if(hyb&&!g.koDone){if((g.zh||g.zhS).trim())wait.push(g);}   /* 검증 중인 문장은 맨 아래 한 줄(동시통역 글 + 원문)로 */
+      else if(hyb&&!g.koDone){if((g.zh||g.zhS).trim())wait.push(g);}   /* 검증 중인 문장 원문은 동시통역 칸 아래에 */
       else if(g.zh||g.zhS||g.ko||g.koS)out.push({seg:g});}
-    if(hyb&&this.running){const ko=this.liveTail;const zh=wait.map(g=>(g.zh+(g.zhS||'')).trim()).join(' ');
-      if(ko||zh)out.push({tail:{ko,zh,busy:wait.some(g=>g.zhDone)}});}
+    if(hyb&&this.running){   /* 아직 검증 문장으로 바뀌지 않은 동시통역 칸들(회색, 문장 단위) — v10.47 */
+      const live=this.pvs.flatMap(c=>c.segs).filter(b=>!b.cov&&(b.ko||b.koS).trim()).map(b=>({live:{ko:(b.ko+(b.koS||'')).trim(),zh:''}}));
+      const zh=wait.map(g=>(g.zh+(g.zhS||'')).trim()).join(' ');
+      if(zh){if(live.length)live[live.length-1].live.zh=zh;else live.push({live:{ko:'',zh,busy:wait.some(g=>g.zhDone)}});}
+      out.push(...live);}
     return out;}
-  /* 동시통역 글 전체와, 검증된 문장이 아직 안 나온 뒷부분(v10.46) */
-  get pvAll(){return this.pvs.flatMap(c=>c.segs).map(g=>(g.ko||'')+(g.koS||'')).join(' ');}
-  get liveTail(){const t=this.pvAll.slice(this.pvMark||0).trim();return t.length>300?'…'+t.slice(-300):t;}
   /* 미리보기 연결(v10.45): 같은 소리를 동시통역 모델에도 보내 번역을 화면 아래 회색 줄에 바로 보여 준다. 기록에는 안 남는다 */
   async connectPv(){
     const c=new LiveConn(this,'P'+(++this.pvN),true);this.pvs.push(c);this.pvPending=c;
@@ -37388,10 +37391,10 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       style={{height:mobile?'calc(100vh - 360px)':'calc(100vh - 380px)',minHeight:260,overflowY:'auto',border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 12px',background:'#fff'}}>
       {!items.length&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>
         {running?'듣고 있습니다 — 말이 시작되면 몇 초 뒤 자막이 나옵니다':<>▶ <b>시작</b>을 누르고 마이크를 허용하세요<br/><span style={{fontSize:'var(--fs-sm)'}}>스피커 소리를 받을 때는 음량을 크게, 마이크 가까이</span></>}</div>}
-      {items.map((it,i)=>it.tail
-        ?<div key="tail" id="tbLiveTail" style={{padding:'6px 0'}} title="동시통역이 바로 옮긴 글 — 받아쓰기+번역으로 검증된 문장이 나오면 이 자리에서 바뀝니다">
-          <div style={{fontSize:mobile?17:19,lineHeight:1.5,color:'var(--text-body)',opacity:.75}}><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginRight:4}}>⚡</span>{it.tail.ko||<span style={{color:'var(--text-label)',fontSize:'var(--fs-sm2)'}}>{it.tail.busy?'검증 번역 중…':'…'}</span>}</div>
-          {it.tail.zh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:2}}>{it.tail.zh}</div>}
+      {items.map((it,i)=>it.live
+        ?<div key={i} className="tbLive" style={{padding:'6px 0',borderBottom:'1px dashed var(--border-default)'}} title="동시통역이 바로 옮긴 글(회색) — 받아쓰기+번역으로 검증된 문장이 나오면 이 칸이 검정 글씨로 바뀝니다">
+          <div style={{fontSize:mobile?17:19,lineHeight:1.5,color:'var(--text-muted)'}}>{it.live.ko||<span style={{color:'var(--text-label)',fontSize:'var(--fs-sm2)'}}>{it.live.busy?'검증 번역 중…':'…'}</span>}</div>
+          {it.live.zh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',marginTop:2}}>{it.live.zh}</div>}
         </div>
         :it.para
         ?<div key={i} style={{padding:'8px 0',borderBottom:'1px dashed var(--border-default)'}} title={it.para.err?'문단 다듬기에 실패해 문장 번역을 그대로 이었습니다':'문단으로 다듬은 번역'}>
@@ -38089,7 +38092,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.46';
+const TB_VERSION='v10.47';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
