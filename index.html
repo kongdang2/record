@@ -36897,6 +36897,10 @@ const liveParse=t=>{t=liveClean(t);const ko=[],fix=[];
 const liveFix=(zh,pairs)=>{let z=String(zh||'');for(const [x,y] of pairs)if(x&&z.includes(x))z=z.split(x).join(y);return z;};
 /* 받아쓰기 조각이 문장 끝 부호 없이 끝났나(다음 조각과 이을 후보) */
 const liveOpen=zh=>{const z=String(zh||'').trim();return !!z&&!/[。！？!?…]["”」』)]?$|\.\s*$/.test(z);};
+/* v10.49: 침묵 길이로 잘린 조각을 문장으로 묶는 기준 — 끝 부호가 없거나, 짧거나(LIVE_JOIN_SHORT자 이하), 끝 토막이 약하면 다음 조각을 기다린다 */
+const LIVE_JOIN_SHORT=12;const LIVE_JOIN_N=3;   /* 한 문장에 최대 3번까지 이어 붙임 */
+const liveJoinable=zh=>{const z=String(zh||'').trim();if(!z||z.length>=LIVE_JOIN_MAX)return false;
+  return liveOpen(z)||z.replace(/[。！？!?…，,、\s"”」』()]/g,'').length<=LIVE_JOIN_SHORT||liveWeakEnd(z);};
 async function liveAsk(prompt,opt,onRetry){
   let last;
   for(let k=0;k<3;k++){
@@ -36998,7 +37002,7 @@ class LiveConn{
         if(prev&&prev.hold&&g.zh.trim()){clearTimeout(prev.hold);prev.hold=null;prev.zh=(prev.zh.trim()+' '+g.zh.trim());prev.joins=(prev.joins||0)+1;
           this.segs.splice(this.si-1,1);this.si--;g=prev;}
         if(!g.zh.trim())g.koDone=true;
-        else if(liveOpen(g.zh)&&g.zh.length<LIVE_JOIN_MAX){g.koS='이어지는 말 기다리는 중…';g.hold=setTimeout(()=>{g.hold=null;s.translate(g);},LIVE_JOIN_MS);}
+        else if(liveJoinable(g.zh)&&(g.joins||0)<LIVE_JOIN_N){g.koS='이어지는 말 기다리는 중…';g.hold=setTimeout(()=>{g.hold=null;s.translate(g);},LIVE_JOIN_MS);}
         else s.translate(g);}
       s.bump();return;}
     if(this.asr)return;
@@ -37127,6 +37131,7 @@ class LiveSession{
     this.bump();this.paraTick();
   }
   /* 검증 문장이 나오면, 그 문장이 끝나기 전에 시작된 동시통역 칸들을 치운다(v10.47) — 검증 칸이 같은 자리에 들어가 구조가 유지된다 */
+  get pvState(){if(this.pvActive&&this.pvActive.ready)return '';if(this.pvFails>=3)return '동시통역 연결 안 됨 — 로그 참고';return '동시통역 연결 중…';}
   pvCover(g){if(this.opt.mode!=='hyb')return;const lim=(g.endAt||Date.now())+1000;
     for(const c of this.pvs)for(const b of c.segs)if(!b.cov&&b.at0&&b.at0<lim)b.cov=true;}
   /* 문단 다듬기(v10.37) — 문장 자막은 먼저 띄우고, 그 틈에 끝난 문장 몇 개를 묶어 원문·번역을 한 문단으로 다시 다듬는다.
@@ -37393,7 +37398,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
         {running?'듣고 있습니다 — 말이 시작되면 몇 초 뒤 자막이 나옵니다':<>▶ <b>시작</b>을 누르고 마이크를 허용하세요<br/><span style={{fontSize:'var(--fs-sm)'}}>스피커 소리를 받을 때는 음량을 크게, 마이크 가까이</span></>}</div>}
       {items.map((it,i)=>it.live
         ?<div key={i} className="tbLive" style={{padding:'6px 0',borderBottom:'1px dashed var(--border-default)'}} title="동시통역이 바로 옮긴 글(회색) — 받아쓰기+번역으로 검증된 문장이 나오면 이 칸이 검정 글씨로 바뀝니다">
-          <div style={{fontSize:mobile?17:19,lineHeight:1.5,color:'var(--text-muted)'}}>{it.live.ko||<span style={{color:'var(--text-label)',fontSize:'var(--fs-sm2)'}}>{it.live.busy?'검증 번역 중…':'…'}</span>}</div>
+          <div style={{fontSize:mobile?17:19,lineHeight:1.5,color:'var(--text-muted)'}}>{it.live.ko||<span style={{color:'var(--text-label)',fontSize:'var(--fs-sm2)'}}>{sess.pvState||(it.live.busy?'검증 번역 중…':'…')}</span>}</div>
           {it.live.zh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',marginTop:2}}>{it.live.zh}</div>}
         </div>
         :it.para
@@ -38092,7 +38097,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.48';
+const TB_VERSION='v10.49';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
