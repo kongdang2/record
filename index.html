@@ -36869,6 +36869,13 @@ const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 Liv
 const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기 (최신)'},{id:'qwen-audio-3.0-asr-flash-streaming',label:'Qwen-Audio 3.0 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
 const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'qwen3.5-flash',label:'번역 Qwen3.5-Flash (Alibaba · 빠름·아주 저렴)'},{id:'qwen3.5-plus',label:'번역 Qwen3.5-Plus (Alibaba · 중국어에 강함)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
 const LIVE_LANGS=[{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'ko',label:'한국어'}];
+/* 일정앱에서 건너온 링크(v10.56) — #cal=일정id&date=…&title=…&lang=ko|en|ja|zh&back=돌아갈 주소 (녹취를 그 일정에 연결) 또는 #rec=기록id (기록 바로 열기).
+   한 번 읽고 주소에서 지운다. 일정 연결은 이 탭이 살아 있는 동안 남는다(새로고침해도) */
+const TB_LINK=(()=>{try{const h=new URLSearchParams(location.hash.slice(1));
+  if(h.get('cal')||h.get('rec')){const o={ev:h.get('cal')||'',date:h.get('date')||'',title:h.get('title')||'',lang:h.get('lang')||'',rec:h.get('rec')||'',back:h.get('back')||''};
+    if(o.ev)sessionStorage.setItem('tb.link',JSON.stringify(o));history.replaceState(null,'',location.pathname);return o;}
+  const sv=sessionStorage.getItem('tb.link');if(sv)return JSON.parse(sv);}catch(_){}return null;})();
+const tbLinkClear=()=>{try{sessionStorage.removeItem('tb.link');}catch(_){}};
 /* 모델 id → 짧은 이름 (화면·기록 표시용) */
 function modelName(id){id=String(id||'');let m;
   if((m=/^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(id)))return 'Claude '+m[1][0].toUpperCase()+m[1].slice(1)+' '+m[2]+(m[3]&&m[3].length<3?'.'+m[3]:'');
@@ -36943,7 +36950,7 @@ class LiveConn{
     if(!jwt)throw new Error('로그인 세션이 없습니다 — 다시 로그인하세요');
     const asr=!this.pv&&o.mode!=='live';this.asr=asr;   /* hyb(정확도+미리보기): 본 연결은 asr, 미리보기 연결(pv)은 live */
     /* 한국어도 섞임: 받아쓰기에 두 언어를 함께 알려 준다(서버가 쉼표 목록을 language_hints로 넘긴다) */
-    const q=new URLSearchParams({jwt,mode:asr?'asr':'live',model:asr?o.asrModel:o.model,from:asr&&o.mix?o.from+',ko':o.from,to:'ko'});
+    const q=new URLSearchParams({jwt,mode:asr?'asr':'live',model:asr?o.asrModel:o.model,from:asr&&o.mix?o.from+',ko':o.from,to:o.from==='ko'?'en':'ko'});   /* 한국어 받아쓰기: 서버 번역은 쓰지 않으므로 to 는 형식상 */
     if(o.host)q.set('host',o.host);
     if(asr){const hot=String(Store.cfg.sttHint||'').trim();if(hot)q.set('hot',hot.slice(0,1200));}
     else{const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);}
@@ -37121,7 +37128,7 @@ class LiveSession{
     const prev=all.slice(Math.max(0,i-5),i).map(x=>'- '+x.zh+(x.ko?'\n  → '+x.ko:'')).join('\n');
     const hint=String(Store.cfg.sttHint||'').trim();
     /* 한국어도 섞임: 한국어 발화(통역사 등)는 번역하지 않고 그대로 자막에 */
-    if(this.opt.mix&&liveIsKo(g.zh)){g.ko=g.zh.trim();g.koS='';g.koDone=true;g.kr=true;g.doneAt=Date.now();this.pvCover(g);this.bump();this.paraTick();return;}
+    if((this.opt.mix&&liveIsKo(g.zh))||this.opt.from==='ko'){g.ko=g.zh.trim();g.koS='';g.koDone=true;g.kr=true;g.doneAt=Date.now();this.pvCover(g);this.bump();this.paraTick();return;}
     g.koS='번역 중…';this.bump();const n=++this.trN;
     /* 동시통역+검증(v10.50): 동시통역 초벌이 다 들어올 때까지 잠깐(최대 2초) 기다렸다가 초벌을 함께 준다 — 검증은 초벌을 바탕으로 틀린 데만 고친다 */
     /* v10.55: 초벌은 프롬프트에 넣지 않는다 — 모델이 초벌(경계가 달라 앞부분뿐)을 베끼고 뒷부분을 빼먹어 내용이 잘렸다. 초벌은 검증이 실패했을 때 살리는 용도로만 */
@@ -37361,22 +37368,23 @@ class LiveSession{
     const live=this.opt.mode==='hyb'?this.liveSegs.map(g=>(g.ko||'').trim()).filter(Boolean).join('\n'):'';
     const ol=this.opt.mode==='hyb'?this.outline:null;
     const outline=ol?[...ol.sections.map(sc=>(sc.title?'**'+sc.title.replace(/\*/g,'')+'**\n':'')+sc.bullets.map(b=>'- '+b).join('\n')),...(ol.loose.length?[ol.loose.map(b=>'- '+b).join('\n')]:[])].join('\n\n'):'';
-    return '# '+title+'\n\n> 🗣 실시간 통역 · '+langLabel(this.opt.from)+(this.opt.mix?'+한국어':'')+' → 한국어 · 약 '+this.minutes+'분 · '+how+'\n\n'
+    return '# '+title+'\n\n> 🗣 실시간 통역 · '+langLabel(this.opt.from)+(this.opt.mix?'+한국어':'')+(this.opt.from==='ko'?' 받아쓰기':' → 한국어')+' · 약 '+this.minutes+'분 · '+how+'\n\n'
       +(audioLinks&&audioLinks.length?audioLinks.join('\n')+'\n\n':'')
       +(ol?'## 실시간 요점 정리\n'+(outline||'(없음)')+'\n\n':'')
       +'## 실시간 통역\n'+(pairs||'(자막 없음)')+'\n\n'+(live?'## 동시통역 자막(검증 전)\n'+live+'\n\n':'')+'## 실시간 원문\n'+(raw||'(없음)')+'\n';
   }
 }
 /* 화면을 옮겨도(번역/정리 확인 등) 통역이 끊기지 않도록 세션은 화면 밖에 둔다 */
-const LIVE={sess:null,saved:null};
+const LIVE={sess:null,saved:null,cal:TB_LINK&&TB_LINK.ev?TB_LINK:null};   /* cal: 일정앱에서 연결해 온 일정 — 녹취가 끝나면 거기에 넣는다 */
 
 function LiveView({db,setDb,toast,onOpenNote,owner}){
   const {Card,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const mobile=useMobile();
   const [,force]=React.useReducer(x=>x+1,0);
-  const [opt,setOpt]=React.useState(()=>({mode:Store.cfg.liveMode||'asr',model:Store.cfg.liveModel||LIVE_MODELS[0].id,
+  const calLang=LIVE.cal&&LIVE_LANGS.some(l=>l.id===LIVE.cal.lang)?LIVE.cal.lang:'';
+  const [opt,setOpt]=React.useState(()=>({mode:calLang==='ko'?'asr':(Store.cfg.liveMode||'asr'),model:Store.cfg.liveModel||LIVE_MODELS[0].id,
     asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,
-    from:Store.cfg.liveFrom||'zh',mix:false,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
+    from:calLang||Store.cfg.liveFrom||'zh',mix:false,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
   const [showZh,setShowZh]=React.useState(!!Store.cfg.liveShowZh);   /* 동시통역 칸 원문 보기(v10.55) */
   const [devs,setDevs]=React.useState([]);const [adv,setAdv]=React.useState(false);const [saving,setSaving]=React.useState('');
   const box=React.useRef(null);const stick=React.useRef(true);const box2=React.useRef(null);const stick2=React.useRef(true);
@@ -37396,7 +37404,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     if(opt.record&&!file)DevRec.prepare();
     if(window.CONV&&CONV.sess&&CONV.sess.running){toast('💬 대화 탭이 켜져 있습니다 — 먼저 정지하세요');return;}
     Store.saveCfg({liveMode:opt.mode,liveModel:opt.model,liveAsrModel:opt.asrModel,liveTrModel:opt.trModel,liveFrom:opt.from,liveMix:!!opt.mix,liveHost:opt.host,liveClean:opt.clean,liveRecord:opt.record});
-    const s=new LiveSession({...opt,file},force);LIVE.sess=s;LIVE.saved=null;force();
+    const s=new LiveSession({...opt,file,...(opt.from==='ko'?{mode:'asr',mix:false}:{})},force);LIVE.sess=s;LIVE.saved=null;force();   /* 한국어는 받아쓰기만(번역 없음) */
     if(file){s.onFileEnd=()=>{if(LIVE.sess===s&&s.running)stop();};toast('파일을 실제 속도로 흘려 넣습니다 — 끝나면 자동으로 정지·저장돼요');}
     try{await s.start();}
     catch(e){s.stop(true);s.err=/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message;force();}
@@ -37418,10 +37426,11 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       if(hyb&&!pend){if(noteLeft&&!s.noteBusy)s.noteRun();else if(groupLeft&&!s.groupBusy)s.groupRun();}
       await new Promise(r=>setTimeout(r,500));}
     const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
-    const title=(s.opt.file?'통역(파일 시험) ':'통역 ')+stamp;
+    const title=(LIVE.cal&&LIVE.cal.title?LIVE.cal.title+' · ':'')+(s.opt.file?'통역(파일 시험) ':s.opt.from==='ko'?'녹취 ':'통역 ')+stamp;
     const {links,where}=await tbKeepRecParts(s,stamp,'통역녹음',setSaving,toast);
     const nn=newNote(title,'work',s.toMarkdown(title,links),['통역']);
     nn.lang=s.opt.mix?'auto':s.opt.from;   /* 정리하기로 녹음을 다시 받아쓸 때의 언어 — 섞인 회의는 자동 감지 */
+    if(LIVE.cal&&LIVE.cal.ev)nn.cal={ev:LIVE.cal.ev,date:LIVE.cal.date,title:LIVE.cal.title};   /* 일정앱에서 연결해 온 녹취 — 정리가 끝나면 그 일정에 자동으로 넣는다 */
     /* 녹음과 자막 맞춰 보기용 — 녹음 조각이 시작한 때와 문장마다 시작 시각(초) */
     nn.live={parts:s.recParts.map(p=>Math.max(0,Math.round((p.t0-s.t0)/100)/10)),secs:s.recParts.map(p=>p.sec),
       segs:s.segs.filter(g=>(g.zh||g.ko).trim()).map(g=>({t:Math.round((g.t||0)*10)/10,ko:(g.ko||'').trim(),zh:(g.zh||g.zhS||'').trim()}))};
@@ -37430,6 +37439,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     toast('통역 기록을 저장했습니다'+(where?' · 녹음 → '+where:''));
     /* 녹음이 있으면 바로 다시 받아써서 정확한 회의록까지 — 번역/정리 화면에서 진행이 보인다 */
     if(links.length)setTimeout(()=>onOpenNote(nn.id,true),300);
+    else if(nn.cal)tbCalExport(nn,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));   /* 녹음이 없으면 자막 그대로 바로 넣는다 */
   };
   const reset=()=>{LIVE.sess=null;LIVE.saved=null;force();};
   const segs=sess?sess.segs.filter(g=>g.zh||g.zhS||g.ko||g.koS):[];const items=sess?sess.items:[];
@@ -37456,11 +37466,11 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       {mobile&&runBtn}</span>}>
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6}}>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
-        {LIVE_MODES.filter(m=>!m.admin||owner||opt.mode===m.id).map(m=><button key={m.id} type="button" disabled={running} onClick={()=>set(m.id==='live'?{mode:m.id,mix:false}:{mode:m.id})} title={m.desc}
+        {LIVE_MODES.filter(m=>!m.admin||owner||opt.mode===m.id).map(m=><button key={m.id} type="button" disabled={running||opt.from==='ko'} onClick={()=>set(m.id==='live'?{mode:m.id,mix:false}:{mode:m.id})} title={opt.from==='ko'?'한국어는 받아쓰기(정확도 우선)만 씁니다':m.desc}
           style={{border:'none',borderRadius:4,padding:'4px 10px',fontSize:'var(--fs-sm2)',fontWeight:opt.mode===m.id?600:500,background:opt.mode===m.id?'var(--surface-active)':'transparent',
             color:opt.mode===m.id?'var(--text-body)':'var(--text-muted)',cursor:running?'default':'pointer',fontFamily:'inherit'}}>{m.label}</button>)}</span>
-      <select style={sel} disabled={running} value={opt.from} onChange={e=>set({from:e.target.value})}>{LIVE_LANGS.filter(l=>l.id!=='ko').map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
-      <span style={{fontSize:'var(--fs-sm2)'}}>→ 한국어</span>
+      <select style={sel} disabled={running} value={opt.from} onChange={e=>set(e.target.value==='ko'?{from:'ko',mode:'asr',mix:false}:{from:e.target.value})}>{LIVE_LANGS.map(l=><option key={l.id} value={l.id}>{l.id==='ko'?'한국어 (받아쓰기만)':l.label}</option>)}</select>
+      <span style={{fontSize:'var(--fs-sm2)'}}>{opt.from==='ko'?'→ 받아쓰기':'→ 한국어'}</span>
       {devs.length>1&&<select style={{...sel,maxWidth:190}} disabled={running} value={opt.device} onChange={e=>set({device:e.target.value})}>
         <option value="">기본 마이크</option>{devs.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'마이크'}</option>)}</select>}
     </div>
@@ -37822,16 +37832,18 @@ function ConvView({setDb,toast,onOpenNote}){
     const segs=s.allSegs.filter(g=>(g.zh||'').trim());
     if(!segs.length&&!s.recParts.length){setSaving('');return;}
     const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
-    const title='대화 '+stamp;
+    const title=(LIVE.cal&&LIVE.cal.title?LIVE.cal.title+' · ':'')+'대화 '+stamp;
     const {links,where}=await tbKeepRecParts(s,stamp,'대화녹음',setSaving,toast);
     const nn=newNote(title,'work',s.toMarkdown(title,links),['통역','대화']);
     nn.lang='auto';   /* 내 한국어와 상대 언어가 섞여 있다 — 정리하기 때 자동 감지 */
+    if(LIVE.cal&&LIVE.cal.ev)nn.cal={ev:LIVE.cal.ev,date:LIVE.cal.date,title:LIVE.cal.title};
     nn.live={parts:s.recParts.map(p=>Math.max(0,Math.round((p.t0-s.t0)/100)/10)),secs:s.recParts.map(p=>p.sec),
       segs:segs.map(g=>({t:Math.round((g.t||0)*10)/10,ko:(g.who==='me'?g.zh:g.ko||'').trim(),zh:(g.who==='me'?g.ko||'':g.zh).trim()}))};
     setDb('notes',arr=>[...arr,nn]);CONV.saved={id:nn.id};setSaving('');force();
     window.dispatchEvent(new Event('tb-usage'));
     toast('대화 기록을 저장했습니다'+(where?' · 녹음 → '+where:''));
     if(links.length)setTimeout(()=>onOpenNote(nn.id,true),300);
+    else if(nn.cal)tbCalExport(nn,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));
   };
   const reset=()=>{CONV.sess=null;CONV.saved=null;force();};
   /* 누르는 동안 말하기 */
@@ -38200,7 +38212,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.55';
+const TB_VERSION='v10.56';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38724,6 +38736,13 @@ function tbToEvent(ev,rec){
   const item={id:old?old.id:uid(),type:'text',x:old?old.x:20,y:old?old.y:100000,w:old?old.w:680,z:0,src,md:p.md,fold:p.fold,foldTitle:p.foldTitle,
     ...(old?{}:{stk:'s'+Date.now().toString(36),ord:0})};
   return {...ev,board:{...b,items:old?b.items.map(i=>i.src===src?item:i):[...b.items,item]}};}
+/* 일정앱에서 연결해 온 기록(rec.cal) → 그 일정에 바로 넣는다(날짜·일정 고르기 없음). 일정이 지워졌으면 오류 */
+async function tbCalExport(rec,toast){
+  const c=rec.cal;if(!c||!c.ev)return false;
+  const {data,error}=await Store.sb.from('pms_items').select('data').eq('user_id',Store.user.id).eq('kind',CAL_KIND).eq('item_id',c.ev).is('deleted_at',null).maybeSingle();
+  if(error)throw new Error(explainSbError(error));
+  const ev=data&&data.data;if(!ev)throw new Error('연결된 일정 『'+(c.title||'')+'』을(를) 찾지 못했습니다 — 지워졌으면 「다른 일정…」으로 고르세요');
+  await CAL.save(tbToEvent(ev,rec));toast('📅 일정 『'+(ev.title||'')+'』('+(ev.date||c.date)+')에 넣었습니다');return true;}
 function TbExportDlg({rec,onClose,toast}){
   const {Button}=window.HDWorkbookDesignSystem_ad60e4;
   const [day,setDay]=React.useState(()=>localDay(rec.created));const [evs,setEvs]=React.useState(null);const [err,setErr]=React.useState('');const [busy,setBusy]=React.useState(false);
@@ -38836,7 +38855,8 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       if(!rawParts.some(p=>!/^###\s/.test(p)))throw new Error('받아쓴 글이 비어 있습니다 — 녹음에 말소리가 있는지 확인하세요');
       TB.log('전사',secs,jobs.length,sttM);render();
       const done=await polishP;
-      if(done){res=done;render();TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');toast(done.korean?'전사·정리 완료':'전사·번역 완료');}
+      if(done){res=done;render();TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');toast(done.korean?'전사·정리 완료':'전사·번역 완료');
+        if(rec.cal)tbCalExport(rec,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));}
       else toast('⚠ 정리·번역 실패 — '+(polishErr&&polishErr.message||'알 수 없는 오류')+' · 받아쓴 글은 남아 있으니 ✨ 정리하기로 다시 하세요');
     }catch(e){
       transcribing=false;q.end();
@@ -38866,8 +38886,9 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean:pre?pre.korean:(lng==='ko'?true:undefined),resume:pre?pre.segs:null,
         onStep:m=>setBusy(m+' ('+pm+')'),onProgress:p=>{upd(rec.id,{md:putPolish(md0,p,pm,segs.length)});}});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
-      upd(rec.id,{md:putPolish(md0,out,pm,segs.length)});
+      const fin={...rec,md:putPolish(md0,out,pm,segs.length)};upd(rec.id,{md:fin.md});
       toast(out.korean?'정리 완료':'정리·번역 완료');
+      if(rec.cal)await tbCalExport(fin,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));
     }catch(e){toast('⚠ 정리·번역 실패 — '+e.message);}
     setBusy('');
   };
@@ -38935,7 +38956,9 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>runTidy(cur)}
           title={'받아쓰기 '+tbSttName(Store.cfg.tbSttModel)+' · 정리 '+modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id)+' — '+(tbSection(cur.md,'녹취')?'받아쓴 글로 회의록(개요·주제별 정리)·한국어 번역·정리된 원문을 다시 만듭니다':'녹음을 처음부터 받아쓰고 이어서 한국어 번역과 회의록(개요·주제별 정리)을 만듭니다. 결과는 맨 위에 붙습니다')}>✨ 정리하기</Button>
         <Button variant="secondary" size="sm" disabled={!!busy} onClick={exportDocx} title="이 기록을 Word 문서로 내려받습니다">📄 Word</Button>
-        <Button variant="secondary" size="sm" disabled={!!busy||Store.mode!=='supabase'} onClick={()=>setToCal(true)} title="정리된 내용을 일정관리 앱의 그날 일정 본문(메모)에 넣습니다">📅 일정으로</Button>
+        <Button variant="secondary" size="sm" disabled={!!busy||Store.mode!=='supabase'} onClick={()=>cur.cal?tbCalExport(cur,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message)):setToCal(true)}
+          title={cur.cal?'연결된 일정 『'+(cur.cal.title||'')+'』('+(cur.cal.date||'')+')의 메모에 바로 넣습니다':'정리된 내용을 일정관리 앱의 그날 일정 본문(메모)에 넣습니다'}>📅 {cur.cal?'일정에 넣기':'일정으로'}</Button>
+        {cur.cal&&<Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setToCal(true)} title="연결된 일정 말고 다른 일정을 골라 넣습니다">다른 일정…</Button>}
         {toCal&&<TbExportDlg rec={cur} toast={toast} onClose={()=>setToCal(false)}/>}
         <Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setEdit(!edit)}>{edit?'✓ 편집 끝':'✎ 편집'}</Button>
         {confirmDel
@@ -39311,8 +39334,8 @@ function TbShell({user,role,onLogout}){
   const NS=window.HDWorkbookDesignSystem_ad60e4;const {AppHeader,Button,Toast,InfoBar}=NS;
   const mobile=useMobile();
   /* 설정은 관리자만 — 팀원은 통역·번역/정리 두 화면만 쓴다 */
-  const [tab,setTab]=React.useState(()=>{try{let t=localStorage.getItem('tb.tab')||'live';if(t==='team')t='me';return (t==='me'&&role!=='owner')?'live':t;}catch(_){return 'live';}});
-  const [recs,setRecs]=React.useState(null);const [sel,setSel]=React.useState(null);const [autoStt,setAutoStt]=React.useState(null);
+  const [tab,setTab]=React.useState(()=>{if(TB_LINK&&TB_LINK.rec)return 'rec';if(TB_LINK&&TB_LINK.ev)return 'live';try{let t=localStorage.getItem('tb.tab')||'live';if(t==='team')t='me';return (t==='me'&&role!=='owner')?'live':t;}catch(_){return 'live';}});
+  const [recs,setRecs]=React.useState(null);const [sel,setSel]=React.useState(TB_LINK&&TB_LINK.rec||null);const [cal,setCal]=React.useState(LIVE.cal);const [autoStt,setAutoStt]=React.useState(null);
   const [toastMsg,setToastMsg]=React.useState('');const [loadErr,setLoadErr]=React.useState('');
   const recsRef=React.useRef([]);const timers=React.useRef({});
   const toast=m=>{setToastMsg(m);clearTimeout(timers.current.t);timers.current.t=setTimeout(()=>setToastMsg(''),2200);};
@@ -39386,6 +39409,9 @@ function TbShell({user,role,onLogout}){
     <nav style={{display:'flex',gap:mobile?0:4,borderBottom:'1px solid var(--border-default)',padding:mobile?'0 4px':'0 16px',background:'#fff',position:'sticky',top:'env(safe-area-inset-top, 0px)',zIndex:20}}>{tabs.map(tabBtn)}</nav>
     <main style={{flex:1,minWidth:0,padding:mobile?'10px 10px 24px':'16px 20px'}}>
       {loadErr&&<InfoBar tone="warn">기록을 불러오지 못했습니다 — {loadErr}</InfoBar>}
+      {cal&&tab!=='me'&&<div style={{marginBottom:10}}><InfoBar>📅 일정 『{cal.title||'(제목 없음)'}』({cal.date})에 연결됐습니다 — 녹취를 마치고 정리가 끝나면 그 일정의 메모에 자동으로 들어갑니다.
+        {cal.back&&<a href={cal.back} target="_blank" rel="noopener" style={{marginLeft:8,color:'var(--color-accent, #2563eb)'}}>일정 열기</a>}
+        <button type="button" onClick={()=>{LIVE.cal=null;tbLinkClear();setCal(null);}} title="이 탭의 녹취를 일정에 자동으로 넣지 않습니다" style={{marginLeft:8,border:'none',background:'none',color:'var(--text-label)',cursor:'pointer',fontSize:'inherit',fontFamily:'inherit'}}>연결 끊기</button></InfoBar></div>}
       {newVer&&<div style={{marginBottom:10}}><InfoBar tone="warn">🔄 새 버전({newVer})이 나왔습니다. {LiveSession.all.size?'지금 통역을 마치고 저장한 뒤 ':''}새로고침해 주세요.
         <Button size="xs" onClick={()=>location.reload()} style={{marginLeft:8}}>새로고침</Button></InfoBar></div>}
       {initPw&&<div style={{marginBottom:10}}><InfoBar>🔑 관리자가 정해 준 초기 비밀번호로 로그인했습니다. 본인만 아는 비밀번호로 바꿔 주세요.
