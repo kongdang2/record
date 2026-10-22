@@ -36899,12 +36899,6 @@ const liveFix=(zh,pairs)=>{let z=String(zh||'');for(const [x,y] of pairs)if(x&&z
 const liveOpen=zh=>{const z=String(zh||'').trim();return !!z&&!/[。！？!?…]["”」』)]?$|\.\s*$/.test(z);};
 /* v10.49: 침묵 길이로 잘린 조각을 문장으로 묶는 기준 — 끝 부호가 없거나, 짧거나(LIVE_JOIN_SHORT자 이하), 끝 토막이 약하면 다음 조각을 기다린다 */
 const LIVE_JOIN_SHORT=12;const LIVE_JOIN_N=3;   /* 한 문장에 최대 3번까지 이어 붙임 */
-/* 초벌과 검증 번역의 낱말 차이(v10.50) — 검증 자막에서 고쳐진 낱말에 밑줄을 긋는다. 공백 단위 토큰 LCS */
-const liveDiff=(a,b)=>{const A=String(a||'').split(/\s+/).filter(Boolean),B=String(b||'').split(/\s+/).filter(Boolean);if(!A.length||!B.length||B.length>400)return [{t:b,ch:false}];
-  const n=A.length,m=B.length;const L=Array.from({length:n+1},()=>new Uint16Array(m+1));
-  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)L[i][j]=A[i]===B[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
-  const out=[];let i=0,j=0;while(j<m){if(i<n&&A[i]===B[j]){out.push({t:B[j]+' ',ch:false});i++;j++;}else if(i<n&&L[i+1][j]>=L[i][j+1])i++;else{out.push({t:B[j]+' ',ch:true});j++;}}
-  const r=[];for(const d of out){const p=r[r.length-1];if(p&&p.ch===d.ch)p.t+=d.t;else r.push({...d});}if(r.length)r[r.length-1].t=r[r.length-1].t.trimEnd();return r;};
 const liveJoinable=zh=>{const z=String(zh||'').trim();if(!z||z.length>=LIVE_JOIN_MAX)return false;
   return liveOpen(z)||z.replace(/[。！？!?…，,、\s"”」』()]/g,'').length<=LIVE_JOIN_SHORT||liveWeakEnd(z);};
 async function liveAsk(prompt,opt,onRetry){
@@ -37128,14 +37122,16 @@ class LiveSession{
       +'- 설명·따옴표·다른 말은 쓰지 않는다\n'
       +'- 인명·회사명·지명은 한국어 발음으로 적는다\n- 숫자·단위·가격·수량은 정확히\n'
       +'- 문장이 중간에 끊겼으면 끊긴 대로 자연스럽게 옮긴다\n- 회의체 존댓말 구어체'
-      +(draft?'\n- 「동시통역 초벌」이 있으면 그 문장과 표현을 그대로 살리고, 원문과 견주어 틀린 데(용어·고유명사·숫자·빠진 말·오역)만 고친다. 초벌은 경계가 조금 달라 앞뒤 문장의 일부가 섞여 있을 수 있으니 이번 발화에 해당하는 부분만 쓴다':'')
+      +(draft?'\n- 「동시통역 초벌」이 있으면 새로 번역하지 말고 초벌을 그대로 베껴 적되, 원문과 견주어 분명히 틀린 낱말(용어·고유명사·숫자·오역)만 바꾸고 빠진 말만 보탠다. 어순·표현·문체·어미는 초벌 그대로 둔다. 초벌이 맞으면 토씨 하나 바꾸지 말고 그대로 다시 적는다(「초벌과 같음」처럼 줄이지 말고 전체를 적는다). 초벌은 경계가 조금 달라 앞뒤 발화의 일부가 섞여 있을 수 있으니 이번 발화에 해당하는 부분만 적고, 초벌에 없는 뒷부분은 새로 옮긴다':'')
       +(hint?'\n\n자주 나오는 용어: '+hint:'');
     const prompt=(prev?'앞선 발화(참고용):\n'+prev+'\n\n':'')+'이번 발화'+(g.cut?'(중간에 끊긴 조각)':'')+':\n'+g.zh+(draft?'\n\n동시통역 초벌:\n'+draft:'');
     try{
       const out=await liveAsk(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:liveMaxTok(g.zh),usageTag:'통역 번역'},m=>{g.koS=m;this.bump();});
       const r=liveParse(out);g.ko=r.ko;g.koS='';
+      /* v10.52: 검증 답이 비거나 「초벌과 같음」처럼 줄여 오면 초벌을 그대로 쓴다(검증 뒤 문장이 비던 문제) */
+      if(draft&&(!g.ko||(g.ko.length<16&&/초벌|동일|같음|그대로|없음/.test(g.ko)))){g.ko=draft;this.log('검증 #'+n+' 답이 비어 초벌 사용');}
       if(r.pairs.length){const z=liveFix(g.zh,r.pairs);if(z!==g.zh){g.raw=g.raw||g.zh;g.zh=z;}}
-    }catch(e){g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}
+    }catch(e){if(draft){g.ko=draft;g.koS='';this.log('검증 실패 #'+n+'(초벌 사용): '+(e.message||e));}else{g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}}
     g.koDone=true;g.doneAt=Date.now();this.pvCover(g);
     this.bump();this.paraTick();
   }
@@ -37422,7 +37418,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
           <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:3,lineHeight:1.5}}>{it.para.zh}</div>
         </div>
         :(g=>(<div key={i} style={{padding:'6px 0',borderBottom:'1px dashed var(--border-default)'}}>
-        <div style={{fontSize:mobile?17:19,lineHeight:1.5,color:'var(--text-body)'}}>{g.draft&&g.koDone?liveDiff(g.draft,g.ko).map((d,k)=>d.ch?<span key={k} style={{textDecoration:'underline',textDecorationColor:'var(--text-accent, #2563eb)',textUnderlineOffset:3}} title={'초벌: '+g.draft}>{d.t}</span>:d.t):g.ko}<span style={{color:'var(--text-label)',fontSize:g.ko?'inherit':'var(--fs-sm2)'}}>{g.koS}</span>{!g.ko&&!g.koS&&<span style={{color:'var(--text-label)'}}>…</span>}</div>
+        <div style={{fontSize:mobile?17:19,lineHeight:1.5,color:'var(--text-body)'}}>{g.ko}<span style={{color:'var(--text-label)',fontSize:g.ko?'inherit':'var(--fs-sm2)'}}>{g.koS}</span>{!g.ko&&!g.koS&&<span style={{color:'var(--text-label)'}}>…</span>}</div>
         {!g.kr&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:2}}>{g.zh}<span style={{opacity:.6}}>{g.zhS}</span></div>}
       </div>))(it.seg))}
     </div>
@@ -38112,7 +38108,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.51';
+const TB_VERSION='v10.52';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
