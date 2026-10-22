@@ -36872,10 +36872,13 @@ const LIVE_LANGS=[{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',
 /* 일정앱에서 건너온 링크(v10.56) — #cal=일정id&date=…&title=…&lang=ko|en|ja|zh&back=돌아갈 주소 (녹취를 그 일정에 연결) 또는 #rec=기록id (기록 바로 열기).
    한 번 읽고 주소에서 지운다. 일정 연결은 이 탭이 살아 있는 동안 남는다(새로고침해도) */
 const TB_LINK=(()=>{try{const h=new URLSearchParams(location.hash.slice(1));
-  if(h.get('cal')||h.get('rec')){const o={ev:h.get('cal')||'',date:h.get('date')||'',title:h.get('title')||'',lang:h.get('lang')||'',rec:h.get('rec')||'',back:h.get('back')||''};
+  if(h.get('cal')||h.get('rec')){const o={ev:h.get('cal')||'',date:h.get('date')||'',title:h.get('title')||'',lang:h.get('lang')||'',rec:h.get('rec')||'',back:h.get('back')||'',embed:h.get('embed')==='1'};
     if(o.ev)sessionStorage.setItem('tb.link',JSON.stringify(o));history.replaceState(null,'',location.pathname);return o;}
   const sv=sessionStorage.getItem('tb.link');if(sv)return JSON.parse(sv);}catch(_){}return null;})();
 const tbLinkClear=()=>{try{sessionStorage.removeItem('tb.link');}catch(_){}};
+/* 일정앱 메모 상자 안(iframe)에 들어와 있을 때(embed=1, v10.58) — 머리글·탭을 숨기고, 녹음 시작·정지·일정에 넣기를 바깥(일정앱)에 알린다 */
+const TB_EMBED=!!(TB_LINK&&TB_LINK.embed&&window.parent!==window);
+const tbPost=m=>{if(!TB_EMBED)return;try{window.parent.postMessage({type:'tb-cal',ev:LIVE.cal&&LIVE.cal.ev||'',...m},'*');}catch(_){}};
 /* 모델 id → 짧은 이름 (화면·기록 표시용) */
 function modelName(id){id=String(id||'');let m;
   if((m=/^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(id)))return 'Claude '+m[1][0].toUpperCase()+m[1].slice(1)+' '+m[2]+(m[3]&&m[3].length<3?'.'+m[3]:'');
@@ -37418,12 +37421,12 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     Store.saveCfg({liveMode:opt.mode,liveModel:opt.model,liveAsrModel:opt.asrModel,liveTrModel:opt.trModel,liveFrom:opt.from,liveMix:!!opt.mix,liveHost:opt.host,liveClean:opt.clean,liveRecord:opt.record});
     const s=new LiveSession({...opt,file,...(opt.from==='ko'?{mode:'asr',mix:false}:{})},force);LIVE.sess=s;LIVE.saved=null;force();   /* 한국어는 받아쓰기만(번역 없음) */
     if(file){s.onFileEnd=()=>{if(LIVE.sess===s&&s.running)stop();};toast('파일을 실제 속도로 흘려 넣습니다 — 끝나면 자동으로 정지·저장돼요');}
-    try{await s.start();}
+    try{await s.start();tbPost({state:'live'});}
     catch(e){s.stop(true);s.err=/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message;force();}
   };
   /* 정지 → 녹음을 기기에 저장(서버에는 안 올림) → 기록 자동 저장 → 바로 정리 */
   const stop=async()=>{
-    const s=LIVE.sess;if(!s)return;s.stop(false);force();
+    const s=LIVE.sess;if(!s)return;s.stop(false);force();tbPost({state:'stopped'});
     const hasText=s.segs.some(g=>(g.zh||g.ko).trim());
     setSaving('녹음 정리 중…');await s.recFinished();
     if(!hasText&&!s.recParts.length){setSaving('');return;}
@@ -38224,7 +38227,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.57';
+const TB_VERSION='v10.58';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38754,7 +38757,7 @@ async function tbCalExport(rec,toast){
   const {data,error}=await Store.sb.from('pms_items').select('data').eq('user_id',Store.user.id).eq('kind',CAL_KIND).eq('item_id',c.ev).is('deleted_at',null).maybeSingle();
   if(error)throw new Error(explainSbError(error));
   const ev=data&&data.data;if(!ev)throw new Error('연결된 일정 『'+(c.title||'')+'』을(를) 찾지 못했습니다 — 지워졌으면 「다른 일정…」으로 고르세요');
-  await CAL.save(tbToEvent(ev,rec));toast('📅 일정 『'+(ev.title||'')+'』('+(ev.date||c.date)+')에 넣었습니다');return true;}
+  await CAL.save(tbToEvent(ev,rec));toast('📅 일정 『'+(ev.title||'')+'』('+(ev.date||c.date)+')에 넣었습니다');tbPost({state:'done',rec:rec.id});return true;}
 function TbExportDlg({rec,onClose,toast}){
   const {Button}=window.HDWorkbookDesignSystem_ad60e4;
   const [day,setDay]=React.useState(()=>localDay(rec.created));const [evs,setEvs]=React.useState(null);const [err,setErr]=React.useState('');const [busy,setBusy]=React.useState(false);
@@ -39409,6 +39412,20 @@ function TbShell({user,role,onLogout}){
   const tabBtn=t=><button key={t.id} type="button" onClick={()=>setTab(t.id)} aria-pressed={tab===t.id}
     style={{border:'none',borderBottom:'2px solid '+(tab===t.id?'var(--wb-ink, #1F2A37)':'transparent'),background:'transparent',padding:mobile?'10px 4px':'10px 14px',
       fontSize:mobile?13:'var(--fs-md)',fontWeight:tab===t.id?700:500,color:tab===t.id?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit',flex:mobile?1:'none',whiteSpace:'nowrap'}}>{t.label}</button>;
+  if(TB_EMBED)return <div style={{minHeight:'100vh',background:'#fff'}}>
+    <main style={{padding:'8px 10px 16px'}}>
+      {loadErr&&<InfoBar tone="warn">기록을 불러오지 못했습니다 — {loadErr}</InfoBar>}
+      {cal&&<div style={{fontSize:12,color:'var(--text-muted)',marginBottom:6}}>📅 『{cal.title||'(제목 없음)'}』 녹취 — 정지하고 정리가 끝나면 이 일정 메모에 들어갑니다 · <a href={location.pathname} target="_blank" rel="noopener" style={{color:'var(--color-accent, #2563eb)'}}>통번역 앱 크게 열기</a></div>}
+      {newVer&&<div style={{marginBottom:10}}><InfoBar tone="warn">🔄 새 버전({newVer})이 나왔습니다. 녹음을 마친 뒤 일정 창을 닫고 다시 열어 주세요.</InfoBar></div>}
+      {recs===null&&!loadErr?<div style={{color:'var(--text-label)',padding:30}}>불러오는 중…</div>:<>
+        <div style={{display:tab==='live'?'block':'none'}}>
+          <LiveView owner={role==='owner'} db={{notes:recs||[]}} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
+        <div style={{display:tab==='rec'?'block':'none'}}>
+          <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/></div>
+      </>}
+    </main>
+    <Toast open={!!toastMsg}>{toastMsg}</Toast>
+  </div>;
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
     <AppHeader mark="🗣" title="통번역" version={role==='owner'?TB_VERSION:undefined} tools={<>
       <TbUsageChip role={role} onOpenSettings={()=>setTab('me')}/>
