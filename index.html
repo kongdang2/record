@@ -36864,7 +36864,7 @@ const LIVE_JOIN_MS=2500;             /* 문장 끝 부호 없이 끝난 조각�
 const LIVE_JOIN_MAX=160;             /* 이 길이를 넘으면 기다리지 않고 바로 번역 */
 const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
 const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 문장이 끝나면 자막'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'},
-  {id:'hyb',label:'⚡🎯 동시통역+정리',desc:'왼쪽: 동시통역 자막이 바로 · 오른쪽: 받아쓰기+번역으로 검증해 소제목·개조식으로 정리 · 소리를 두 곳에 보내 비용이 조금 더 듦 (관리자 시험용, v10.53)',admin:true}];
+  {id:'hyb',label:'⚡🎯 동시통역+정리',desc:'왼쪽: 동시통역 자막이 바로 · 오른쪽: 받아쓰기+번역으로 검증한 내용을 한국어 개조식 요점으로 쌓고, 쌓이면 소제목·테마로 묶음 · 소리를 두 곳에 보내 비용이 조금 더 듦 (관리자 시험용, v10.54)',admin:true}];
 const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate (최신)'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'},{id:'qwen3-livetranslate-flash-realtime',label:'Qwen3 LiveTranslate'}];
 const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기 (최신)'},{id:'qwen-audio-3.0-asr-flash-streaming',label:'Qwen-Audio 3.0 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
 const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'qwen3.5-flash',label:'번역 Qwen3.5-Flash (Alibaba · 빠름·아주 저렴)'},{id:'qwen3.5-plus',label:'번역 Qwen3.5-Plus (Alibaba · 중국어에 강함)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
@@ -36898,7 +36898,8 @@ const liveFix=(zh,pairs)=>{let z=String(zh||'');for(const [x,y] of pairs)if(x&&z
 /* 받아쓰기 조각이 문장 끝 부호 없이 끝났나(다음 조각과 이을 후보) */
 const liveOpen=zh=>{const z=String(zh||'').trim();return !!z&&!/[。！？!?…]["”」』)]?$|\.\s*$/.test(z);};
 /* v10.49: 침묵 길이로 잘린 조각을 문장으로 묶는 기준 — 끝 부호가 없거나, 짧거나(LIVE_JOIN_SHORT자 이하), 끝 토막이 약하면 다음 조각을 기다린다 */
-const LIVE_JOIN_SHORT=12;const LIVE_JOIN_N=3;   /* 한 문장에 최대 3번까지 이어 붙임 */
+const LIVE_JOIN_SHORT=12;const LIVE_JOIN_N=3;
+const LIVE_GROUP_N=8;const LIVE_GROUP_MAX=20;   /* 동시통역+정리(v10.54): 안 묶인 요점이 8개면 소제목으로 묶는다(최대 20개씩) */   /* 한 문장에 최대 3번까지 이어 붙임 */
 const liveJoinable=zh=>{const z=String(zh||'').trim();if(!z||z.length>=LIVE_JOIN_MAX)return false;
   return liveOpen(z)||z.replace(/[。！？!?…，,、\s"”」』()]/g,'').length<=LIVE_JOIN_SHORT||liveWeakEnd(z);};
 async function liveAsk(prompt,opt,onRetry){
@@ -37019,7 +37020,8 @@ class LiveConn{
 class LiveSession{
   constructor(opt,onChange){this.opt=opt;this.onChange=onChange;this.conns=[];this.active=null;this.queue=[];this.n=0;
     this.running=false;this.err='';this.logs=[];this.level=0;this.t0=0;this.fails=0;this.recParts=[];this.trN=0;this.paras=[];this.paraBusy=false;
-    this.pvs=[];this.pvActive=null;this.pvPending=null;this.pvQueue=[];this.pvN=0;this.pvFails=0;}
+    this.pvs=[];this.pvActive=null;this.pvPending=null;this.pvQueue=[];this.pvN=0;this.pvFails=0;
+    this.notes=[];this.sections=[];this.noteBusy=false;this.groupBusy=false;}
   log(m){this.logs.push(new Date().toLocaleTimeString('ko-KR')+' '+m);if(this.logs.length>60)this.logs.shift();console.log('[PMS 통역]',m);}
   bump(){if(this._raf)return;this._raf=requestAnimationFrame(()=>{this._raf=0;this.onChange&&this.onChange();});}
   get segs(){return this.conns.flatMap(c=>c.segs);}
@@ -37135,8 +37137,59 @@ class LiveSession{
       if(r.pairs.length){const z=liveFix(g.zh,r.pairs);if(z!==g.zh){g.raw=g.raw||g.zh;g.zh=z;}}
     }catch(e){if(draft){g.ko=draft;g.koS='';this.log('검증 실패 #'+n+'(초벌 사용): '+(e.message||e));}else{g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}}
     g.koDone=true;g.doneAt=Date.now();this.pvCover(g);
-    this.bump();this.paraTick();
+    this.bump();this.paraTick();this.noteTick();
   }
+  /* ── 동시통역+정리(v10.54): 오른쪽 칸은 검증된 문장을 한국어 개조식 요점으로만 쌓고, 쌓이면 소제목·테마로 묶는다 ── */
+  noteTick(){if(this.opt.mode!=='hyb')return;clearTimeout(this.noteT);this.noteT=setTimeout(()=>this.noteRun(),300);}
+  noteLeft(){return this.segs.filter(g=>g.koDone&&!g.noted&&(g.ko||'').trim()&&!g.kr);}
+  async noteRun(){
+    if(this.noteBusy||this.opt.mode!=='hyb')return;
+    const run=this.noteLeft().slice(0,6);if(!run.length)return;
+    this.noteBusy=true;for(const g of run)g.noted=true;
+    const hint=String(Store.cfg.sttHint||'').trim();const prev=this.notes.slice(-6).map(n=>'- '+n.text).join('\n');
+    const system='너는 석유화학 회사 회의의 서기다. 통역된 한국어 발화를 회의록용 개조식 요점으로 적는다.\n'
+      +'- 출력: 「- 」로 시작하는 줄만, 발화 내용에 따라 1~3줄(짧은 인사·추임새·중복이면 「없음」 한 줄). 각 줄은 명사형이나 「~함」「~필요」로 끝맺고 30자 안팎\n'
+      +'- 숫자·단위·고유명사·결정·할 일·일정은 빠뜨리지 않는다. 앞선 요점과 겹치는 내용은 다시 적지 않는다\n- 설명·제목·다른 말은 쓰지 않는다'
+      +(hint?'\n\n자주 나오는 용어: '+hint:'');
+    const prompt=(prev?'앞선 요점(참고용, 다시 적지 않음):\n'+prev+'\n\n':'')+'이번 발화(한국어 번역):\n'+run.map(g=>g.ko.trim()).join('\n');
+    try{
+      const out=await liveAsk(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:600,usageTag:'통역 요점'});
+      const lines=liveClean(out).split('\n').map(x=>x.trim()).filter(x=>/^[-•·▪]\s*\S/.test(x)).map(x=>x.replace(/^[-•·▪]\s*/,'').replace(/^번역\s*[:：]\s*/,''));
+      for(const t of lines)if(t&&!/^없음$/.test(t))this.notes.push({text:t,segs:run,t:Date.now()});
+    }catch(e){this.log('요점 추출 실패: '+(e.message||e));for(const g of run)this.notes.push({text:g.ko.trim(),segs:[g],t:Date.now(),raw:true});}
+    this.noteBusy=false;this.bump();this.noteTick();this.groupTick();
+  }
+  groupTick(){clearTimeout(this.groupT);this.groupT=setTimeout(()=>this.groupRun(),500);}
+  groupLeft(){return this.notes.filter(n=>!n.sec);}
+  async groupRun(){
+    if(this.groupBusy||this.noteBusy||this.opt.mode!=='hyb')return;
+    const ung=this.groupLeft();if(!ung.length)return;
+    const last=ung[ung.length-1];const idle=Date.now()-Math.max(this.lastLoud||0,last.t||0)>=15000;
+    const due=ung.length>=LIVE_GROUP_N||(!this.running&&ung.length>=2)||(idle&&ung.length>=4);
+    if(!due){clearTimeout(this.groupT);this.groupT=setTimeout(()=>this.groupRun(),2000);return;}
+    this.groupBusy=true;const run=ung.slice(0,LIVE_GROUP_MAX);
+    const titles=this.sections.map(x=>x.title).filter(Boolean);const lastSec=this.sections[this.sections.length-1];
+    const system='너는 석유화학 회사 회의의 서기다. 회의 중 쌓인 개조식 요점들을 주제별로 묶어 소제목을 붙인다.\n'
+      +'- 출력 형식: 「## 소제목」 줄(10자 안팎, 내용이 드러나게) 다음에 그 주제의 요점을 「- 」 줄로. 주제가 여럿이면 이 묶음을 순서대로 반복. 주제가 하나면 소제목 하나\n'
+      +'- 요점은 겹치는 것을 합치고 말을 다듬되 내용(숫자·고유명사·결정·할 일)을 빼지 않는다. 순서는 원래대로\n'
+      +'- 첫 요점들이 바로 앞 소제목의 이어지는 내용이면 첫 소제목을 그 이름 그대로 다시 쓴다\n- 설명·다른 말은 쓰지 않는다';
+    const prompt=(lastSec?'바로 앞 소제목: '+lastSec.title+'\n':'')+(titles.length>1?'앞서 쓴 소제목들: '+titles.slice(0,-1).join(' / ')+'\n':'')+'\n요점들:\n'+run.map(n=>'- '+n.text).join('\n');
+    try{
+      const out=await liveAsk(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:Math.max(600,run.length*120),usageTag:'통역 묶기'});
+      const secs=[];let cur=null;
+      for(const ln of liveClean(out).split('\n')){const x=ln.trim();if(!x)continue;
+        const h=/^#{1,4}\s*(.+)$|^소제목\s*[:：]\s*(.+)$/.exec(x);if(h){cur={title:(h[1]||h[2]).trim(),bullets:[],notes:[]};secs.push(cur);continue;}
+        const b=/^[-•·▪]\s*(.+)$/.exec(x);if(b){if(!cur){cur={title:'',bullets:[],notes:[]};secs.push(cur);}cur.bullets.push(b[1].trim());}}
+      if(!secs.length||!secs.some(x=>x.bullets.length))throw new Error('빈 응답');
+      for(const n of run)n.sec=true;
+      for(const sc of secs){if(!sc.bullets.length)continue;
+        if(lastSec&&sc===secs[0]&&sc.title&&lastSec.title===sc.title){lastSec.bullets.push(...sc.bullets);continue;}
+        this.sections.push({title:sc.title||'기타',bullets:sc.bullets,t:Date.now()});}
+    }catch(e){this.log('요점 묶기 실패: '+(e.message||e));for(const n of run)n.sec=true;this.sections.push({title:'',bullets:run.map(n=>n.text),t:Date.now(),err:true});}
+    this.groupBusy=false;this.bump();this.groupTick();
+  }
+  /* 오른쪽 칸·기록용 — 묶인 소제목들 + 아직 안 묶인 요점 */
+  get outline(){return {sections:this.sections,loose:this.groupLeft().map(n=>n.text)};}
   /* 검증 문장이 나오면, 그 문장이 끝나기 전에 시작된 동시통역 칸들을 치운다(v10.47) — 검증 칸이 같은 자리에 들어가 구조가 유지된다 */
   get pvState(){if(this.pvActive&&this.pvActive.ready)return '';if(this.pvFails>=3)return '동시통역 연결 안 됨 — 로그 참고';return '동시통역 연결 중…';}
   /* 이 문장이 끝나기 전에 시작된 동시통역 칸들 — 동시통역은 문장 끝 신호를 드물게 주어 한 칸이 길게 이어질 수 있으므로 글자 위치(covLen)로 가린다(v10.50) */
@@ -37170,7 +37223,7 @@ class LiveSession{
   paraTick(){clearTimeout(this.paraT);this.paraT=setTimeout(()=>this.paraRun(),300);}
   paraLeft(){return this.segs.filter(g=>!g.para&&(g.zh||'').trim());}
   async paraRun(){
-    if(this.paraBusy||this.opt.mode==='live')return;
+    if(this.paraBusy||this.opt.mode==='live'||this.opt.mode==='hyb')return;   /* hyb는 문단 대신 요점·묶기(noteRun/groupRun) */
     const rest=this.paraLeft();const run=[];
     for(const g of rest){if(!g.koDone||g.fixing)break;run.push(g);if(run.length>=LIVE_PARA_MAX)break;}
     if(!run.length)return;
@@ -37297,8 +37350,11 @@ class LiveSession{
     const pairs=this.items.filter(it=>it.para||(it.seg&&(it.seg.zh||it.seg.ko).trim())).map(it=>it.para?paraMd(it.para):pair(it.seg)).join('\n\n');
     const raw=segs.map(g=>(g.zh||g.zhS).trim()).filter(Boolean).join('\n');
     const live=this.opt.mode==='hyb'?this.liveSegs.map(g=>(g.ko||'').trim()).filter(Boolean).join('\n'):'';
+    const ol=this.opt.mode==='hyb'?this.outline:null;
+    const outline=ol?[...ol.sections.map(sc=>(sc.title?'**'+sc.title.replace(/\*/g,'')+'**\n':'')+sc.bullets.map(b=>'- '+b).join('\n')),...(ol.loose.length?[ol.loose.map(b=>'- '+b).join('\n')]:[])].join('\n\n'):'';
     return '# '+title+'\n\n> 🗣 실시간 통역 · '+langLabel(this.opt.from)+(this.opt.mix?'+한국어':'')+' → 한국어 · 약 '+this.minutes+'분 · '+how+'\n\n'
       +(audioLinks&&audioLinks.length?audioLinks.join('\n')+'\n\n':'')
+      +(ol?'## 실시간 요점 정리\n'+(outline||'(없음)')+'\n\n':'')
       +'## 실시간 통역\n'+(pairs||'(자막 없음)')+'\n\n'+(live?'## 동시통역 자막(검증 전)\n'+live+'\n\n':'')+'## 실시간 원문\n'+(raw||'(없음)')+'\n';
   }
 }
@@ -37344,9 +37400,12 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     /* 번역이 아직 돌고 있으면 잠깐 기다린다(최대 8초) — 속도 우선은 서버가 마지막 문장을 보내고 닫을 때까지 */
     for(let i=0;i<24;i++){
       const pend=s.segs.some(g=>(g.zhDone&&!g.koDone)||g.fixing)||(s.opt.mode==='live'&&s.conns.some(c=>!c.gone));
-      const left=s.opt.mode!=='live'&&s.paraLeft().filter(g=>g.koDone&&!g.fixing).length>=2;   /* 남은 문장 2개 이상은 마지막 문단으로(최대 12초) */
-      if(!pend&&!s.paraBusy&&!left)break;
+      const hyb=s.opt.mode==='hyb';
+      const left=!hyb&&s.opt.mode!=='live'&&s.paraLeft().filter(g=>g.koDone&&!g.fixing).length>=2;   /* 남은 문장 2개 이상은 마지막 문단으로(최대 12초) */
+      const noteLeft=hyb&&(s.noteBusy||s.noteLeft().length>0);const groupLeft=hyb&&!noteLeft&&(s.groupBusy||s.groupLeft().length>=2);
+      if(!pend&&!s.paraBusy&&!left&&!noteLeft&&!groupLeft)break;
       if(!pend&&!s.paraBusy&&left)s.paraRun();
+      if(hyb&&!pend){if(noteLeft&&!s.noteBusy)s.noteRun();else if(groupLeft&&!s.groupBusy)s.groupRun();}
       await new Promise(r=>setTimeout(r,500));}
     const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
     const title=(s.opt.file?'통역(파일 시험) ':'통역 ')+stamp;
@@ -37427,9 +37486,17 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
         {!p.bullets&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:3,lineHeight:1.5}}>{p.zh}</div>}</div>;
       const verified=<div ref={hyb?box2:box} onScroll={e=>{const el=e.currentTarget;(hyb?stick2:stick).current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}}
         style={{...boxStyle,height:hyb&&mobile?'38vh':h,minHeight:hyb&&mobile?180:260}}>
-        {!items.length&&(hyb?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:40,lineHeight:1.8,fontSize:'var(--fs-sm2)'}}>{running?'검증·정리 중 — 받아쓰기한 문장이 번역되면 여기에 쌓이고, 5문장마다 소제목·요점으로 정리됩니다':'받아쓰기+번역으로 검증한 문장과 소제목·요점 정리'}</div>:empty)}
-        {items.map((it,i)=>it.para?paraRow(it.para,i,!hyb):segRow(it.seg,i,!hyb))}
-        {hyb&&running&&sess.waitN>0&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',padding:'6px 0'}}>검증 중 {sess.waitN}문장…</div>}
+        {hyb?(()=>{const ol=sess.outline;const none=!ol.sections.length&&!ol.loose.length;const ul={margin:'4px 0 0',paddingLeft:18,fontSize:'var(--fs-md)',lineHeight:1.55,color:'var(--text-body)'};
+          return <>
+            {none&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:40,lineHeight:1.8,fontSize:'var(--fs-sm2)'}}>{running?'정리 중 — 받아쓰기·번역으로 검증한 내용이 요점으로 쌓이고, 쌓이면 소제목으로 묶입니다':'받아쓰기+번역으로 검증한 내용의 개조식 정리'}</div>}
+            {ol.sections.map((sc,i)=><div key={'s'+i} style={{padding:'8px 0',borderBottom:'1px dashed var(--border-default)'}} title={sc.err?'묶기에 실패해 요점을 그대로 두었습니다':''}>
+              {sc.title&&<div style={{fontSize:'var(--fs-md)',fontWeight:700,lineHeight:1.5,color:'var(--text-body)'}}>{sc.title}</div>}
+              <ul style={ul}>{sc.bullets.map((b,k)=><li key={k}>{b}</li>)}</ul></div>)}
+            {ol.loose.length>0&&<div style={{padding:'8px 0'}}><ul style={ul}>{ol.loose.map((b,k)=><li key={k}>{b}</li>)}</ul></div>}
+            {running&&(sess.waitN>0||sess.noteLeft().length>0||sess.noteBusy)&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',padding:'6px 0'}}>{sess.noteBusy||sess.noteLeft().length?'요점 정리 중…':'검증 중 '+sess.waitN+'문장…'}</div>}
+            {sess.groupBusy&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',padding:'2px 0'}}>소제목으로 묶는 중…</div>}
+          </>;})()
+        :<>{!items.length&&empty}{items.map((it,i)=>it.para?paraRow(it.para,i,true):segRow(it.seg,i,true))}</>}
       </div>;
       if(!hyb)return verified;
       const live=<div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?'42vh':h,minHeight:mobile?200:260}}>
@@ -38115,7 +38182,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.53';
+const TB_VERSION='v10.54';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
