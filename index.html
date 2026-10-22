@@ -37116,7 +37116,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
   const [,force]=React.useReducer(x=>x+1,0);
   const [opt,setOpt]=React.useState(()=>({mode:Store.cfg.liveMode||'asr',model:Store.cfg.liveModel||LIVE_MODELS[0].id,
     asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,
-    from:Store.cfg.liveFrom||'zh',mix:!!Store.cfg.liveMix,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
+    from:Store.cfg.liveFrom||'zh',mix:false,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
   const [devs,setDevs]=React.useState([]);const [adv,setAdv]=React.useState(false);const [saving,setSaving]=React.useState('');
   const box=React.useRef(null);const stick=React.useRef(true);
   const sess=LIVE.sess;const running=!!(sess&&sess.running);
@@ -37187,8 +37187,6 @@ function LiveView({db,setDb,toast,onOpenNote}){
             color:opt.mode===m.id?'var(--text-body)':'var(--text-muted)',cursor:running?'default':'pointer',fontFamily:'inherit'}}>{m.label}</button>)}</span>
       <select style={sel} disabled={running} value={opt.from} onChange={e=>set({from:e.target.value})}>{LIVE_LANGS.filter(l=>l.id!=='ko').map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
       <span style={{fontSize:'var(--fs-sm2)'}}>→ 한국어</span>
-      <label style={{cursor:'pointer',fontSize:'var(--fs-sm2)',whiteSpace:'nowrap'}} title="통역사·우리 쪽 한국어가 섞이는 자리 — 두 언어를 함께 받아쓰고, 한국어 발화는 번역 없이 그대로 보여 줍니다. 🎯 정확도 우선에서만 됩니다">
-        <input type="checkbox" disabled={running} checked={!!opt.mix} onChange={e=>set(e.target.checked?{mix:true,mode:'asr'}:{mix:false})}/> 한국어도 섞임</label>
       {devs.length>1&&<select style={{...sel,maxWidth:190}} disabled={running} value={opt.device} onChange={e=>set({device:e.target.value})}>
         <option value="">기본 마이크</option>{devs.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'마이크'}</option>)}</select>}
     </div>
@@ -37903,7 +37901,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.35';
+const TB_VERSION='v10.36';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
