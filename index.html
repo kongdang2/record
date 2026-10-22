@@ -36855,7 +36855,11 @@ const LIVE_ROTATE_MS=120*1000;       /* 무료 플랜 150초 한도보다 여유
 const LIVE_ROTATE_GRACE=20*1000;     /* 교대 때 말하는 중이면 문장이 끝날 때까지 이만큼 더 기다린다(v10.37) */
 const LIVE_PARA_N=6;                 /* 문단 다듬기 — 끝난 문장이 이만큼 모이면 */
 const LIVE_PARA_MAX=12;              /* 밀렸을 때 한 문단에 넣는 최대 문장 수 */
-const LIVE_PARA_GAP=10*1000;         /* 말이 이만큼 멈추면 모인 문장(2개 이상)을 문단으로 */
+const LIVE_PARA_GAP=10*1000;         /* 마이크 소리가 이만큼 멈추면 모인 문장(2개 이상)을 문단으로(v10.40: 번역이 끝난 때가 아니라 실제 소리 기준) */
+const LIVE_PARA_CHARS=600;           /* 문장 수가 모자라도 원문이 이만큼 모이면 문단으로 */
+const LIVE_LOUD=0.01;                /* 이보다 큰 소리가 있으면 말하는 중으로 본다(조용한 마이크도 잡히게 낮게) */
+/* 조각 끝이 「所以。」「那么。」처럼 짧은 토막이면 말이 끊긴 자리일 가능성이 커서 문단을 거기서 끊지 않는다 */
+const liveWeakEnd=zh=>{const z=String(zh||'').trim().replace(/[。！？!?…\.\s"”」』)]+$/,'');const last=z.split(/[，,、；;：:]/).pop()||'';return last.replace(/[呃嗯啊]/g,'').length<=3;};
 const LIVE_JOIN_MS=2500;             /* 문장 끝 부호 없이 끝난 조각은 이만큼 다음 조각을 기다려 이어 붙인다(v10.38) */
 const LIVE_JOIN_MAX=160;             /* 이 길이를 넘으면 기다리지 않고 바로 번역 */
 const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
@@ -37025,7 +37029,7 @@ class LiveSession{
     proc.onaudioprocess=e=>{
       const inp=e.inputBuffer.getChannelData(0);const mt=this.stream&&this.stream.getAudioTracks()[0];if(mt&&mt.readyState==='live'&&!mt.muted)this.lastAudio=Date.now();
       let pk=0;for(let i=0;i<inp.length;i+=16){const a=Math.abs(inp[i]);if(a>pk)pk=a;}
-      this.level=this.level*0.6+pk*0.4;
+      this.level=this.level*0.6+pk*0.4;if(pk>LIVE_LOUD)this.lastLoud=Date.now();
       /* 16kHz로 (브라우저가 이미 16kHz면 그대로) */
       let out;
       if(Math.abs(ratio-1)<1e-3)out=inp.slice(0);
@@ -37114,8 +37118,10 @@ class LiveSession{
     for(const g of rest){if(!g.koDone)break;run.push(g);if(run.length>=LIVE_PARA_MAX)break;}
     if(!run.length)return;
     const busy=this.segs.some(g=>g.zhDone&&!g.koDone);
-    const last=run[run.length-1];const idle=Date.now()-(last.doneAt||0)>=LIVE_PARA_GAP;const talking=rest.length>run.length;
-    const due=run.length>=LIVE_PARA_N||((!this.running||(idle&&!talking))&&run.length>=2);   /* 문장 하나는 문단으로 안 만든다 */
+    const last=run[run.length-1];const chars=run.reduce((n,g)=>n+g.zh.trim().length,0);
+    const idle=Date.now()-Math.max(this.lastLoud||0,last.doneAt||0)>=LIVE_PARA_GAP;const talking=rest.length>run.length;
+    const weak=this.running&&run.length<LIVE_PARA_MAX&&liveWeakEnd(last.zh);   /* 끝 조각이 토막이면 다음 문장까지 기다린다 */
+    const due=!weak&&(run.length>=LIVE_PARA_N||chars>=LIVE_PARA_CHARS||((!this.running||(idle&&!talking))&&run.length>=2));   /* 문장 하나는 문단으로 안 만든다 */
     if(busy||!due){clearTimeout(this.paraT);this.paraT=setTimeout(()=>this.paraRun(),1000);return;}
     this.paraBusy=true;const p={segs:run,zh:'',ko:'',done:false};this.paras.push(p);for(const g of run)g.para=p;
     const hint=String(Store.cfg.sttHint||'').trim();const prevP=this.paras[this.paras.length-2];
@@ -38008,7 +38014,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.39';
+const TB_VERSION='v10.40';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
