@@ -36220,7 +36220,19 @@ const Store={
 };
 
 /* Claude 호출 — 우선순위: ① Supabase Edge Function(키가 서버에만 있음, 권장) ② 브라우저 직접(설정에 API 키) ③ 프리뷰 호스트(window.claude) */
-const CLAUDE_MODELS=[{id:'claude-sonnet-5-5',label:'Sonnet 5.5 · 균형(권장)'},{id:'claude-opus-5-5',label:'Opus 5.5 · 가장 정확'},{id:'claude-haiku-5-5',label:'Haiku 5.5 · 빠르고 아주 저렴'},{id:'claude-haiku-4-5-20251001',label:'Haiku 4.5 · 예전 모델'}];
+const CLAUDE_MODELS=[{id:'claude-sonnet-5-5',label:'Sonnet 5.5 · 균형(권장)'},{id:'claude-opus-5-5',label:'Opus 5.5 · 가장 정확'},{id:'claude-haiku-5-5',label:'Haiku 5.5 · 빠르고 아주 저렴'},{id:'claude-haiku-4-5-20251001',label:'Haiku 4.5 · 예전 모델'},
+  {id:'qwen3.5-plus',label:'Qwen3.5-Plus (Alibaba) · 중국어에 강함 · Sonnet의 1/5 값'},{id:'qwen3.5-flash',label:'Qwen3.5-Flash (Alibaba) · 빠르고 아주 저렴'}];
+const isQwen=m=>/^qwen/i.test(String(m||''));
+/* Alibaba Qwen 글 모델(v10.39) — Supabase Edge Function `qwen`이 DashScope(싱가포르)로 중계한다. 답 모양은 claude 함수와 같다 */
+async function askQwen(prompt,opt={}){
+  const model=opt.model;
+  if(Store.mode!=='supabase')throw new Error('Qwen 모델은 클라우드(Supabase) 연결이 필요합니다 — 키가 서버에 있기 때문입니다');
+  const {data,error}=await Store.sb.functions.invoke('qwen',{body:{prompt,model,max_tokens:opt.max_tokens||1500,system:opt.system}});
+  if(error){let detail='';try{const j=await error.context?.json();detail=j&&j.error;}catch(_){}
+    throw new Error(detail||(/404|not found/i.test(error.message)?'서버 함수 qwen이 아직 배포되지 않았습니다 — 설정 › 모델에서 Claude 모델을 고르거나 관리자에게 알리세요':error.message));}
+  if(data&&data.error)throw new Error(data.error);
+  claudeUsage(data.model||model,data.usage,opt.usageTag);return data.text;
+}
 /* 사용 토큰 알림 — 통번역 앱이 요금 계산용으로 받는다(없으면 무시) */
 const claudeUsage=(model,u,tag)=>{try{if(u&&window.__claudeUsage)window.__claudeUsage(model,u,tag);}catch(_){}};
 function claudeMode(){const c=Store.cfg;if(c.claudeVia==='direct'&&c.anthropicKey)return 'direct';if(Store.mode==='supabase'&&c.claudeVia!=='direct')return 'edge';if(c.anthropicKey)return 'direct';if(window.claude&&window.claude.complete)return 'preview';return 'none';}
@@ -36236,6 +36248,7 @@ function explainClaudeError(e,mode){const m=(e&&e.message)||String(e);
   return m;}
 async function askClaude(prompt,opt={}){
   const mode=claudeMode();const model=opt.model||Store.cfg.claudeModel||CLAUDE_MODELS[0].id;
+  if(isQwen(model)&&!(opt.images&&opt.images.length))return askQwen(prompt,{...opt,model});   /* Qwen은 Alibaba로(그림은 Claude로) */
   try{
     if(mode==='edge'){
       const {data,error}=await Store.sb.functions.invoke('claude',{body:{prompt,model,max_tokens:opt.max_tokens||1500,system:opt.system,images:opt.images||[]}});
@@ -36849,7 +36862,7 @@ const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
 const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 문장이 끝나면 자막'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'}];
 const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate (최신)'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'},{id:'qwen3-livetranslate-flash-realtime',label:'Qwen3 LiveTranslate'}];
 const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기 (최신)'},{id:'qwen-audio-3.0-asr-flash-streaming',label:'Qwen-Audio 3.0 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
-const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
+const LIVE_TR_MODELS=[{id:'claude-haiku-5-5',label:'번역 Haiku 5.5 (빠름·아주 저렴)'},{id:'qwen3.5-flash',label:'번역 Qwen3.5-Flash (Alibaba · 빠름·아주 저렴)'},{id:'qwen3.5-plus',label:'번역 Qwen3.5-Plus (Alibaba · 중국어에 강함)'},{id:'claude-haiku-4-5-20251001',label:'번역 Haiku 4.5 (빠름)'},{id:'claude-sonnet-5-5',label:'번역 Sonnet 5.5 (정확)'},{id:'claude-opus-5-5',label:'번역 Opus 5.5 (가장 정확·느림)'}];
 const LIVE_LANGS=[{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'ko',label:'한국어'}];
 /* 모델 id → 짧은 이름 (화면·기록 표시용) */
 function modelName(id){id=String(id||'');let m;
@@ -36988,7 +37001,7 @@ class LiveSession{
   async start(){
     if(await TbVer.check())throw new Error('새 버전('+TbVer.latest+')이 나왔습니다 — 화면 위 「새로고침」을 누른 뒤 다시 시작하세요');
     if(Store.mode!=='supabase')throw new Error('통역은 클라우드(Supabase) 연결이 필요합니다 — 키가 서버에 있기 때문입니다');
-    if(this.opt.mode==='asr'&&claudeMode()==='none')throw new Error('정확도 우선은 Claude 번역을 씁니다 — 설정 › Claude 연결을 먼저 확인하거나 ⚡ 속도 우선을 고르세요');
+    if(this.opt.mode==='asr'&&claudeMode()==='none'&&!isQwen(this.opt.trModel))throw new Error('정확도 우선은 Claude 번역을 씁니다 — 설정 › Claude 연결을 먼저 확인하거나 ⚡ 속도 우선을 고르세요');
     await this.openMic();
     this.running=true;this.t0=Date.now();this.err='';this.note='';LiveSession.all.add(this);
     if(this.opt.record!==false)this.startRec();
@@ -37310,7 +37323,7 @@ function LiveView({db,setDb,toast,onOpenNote}){
       </div>))(it.seg))}
     </div>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-      <span>소리는 Alibaba(싱가포르)로{opt.mode==='asr'?', 받아쓴 글은 Anthropic(Claude)으로':''} 전송됩니다 · 다른 메뉴로 옮겨도 통역은 계속됩니다</span>
+      <span>소리는 Alibaba(싱가포르)로{opt.mode==='asr'?(isQwen(opt.trModel)?', 받아쓴 글도 Alibaba(Qwen)로':', 받아쓴 글은 Anthropic(Claude)으로'):''} 전송됩니다 · 다른 메뉴로 옮겨도 통역은 계속됩니다</span>
       {sess&&<span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}회 · 로그 보기(마우스 올리기)</span>}
     </div>
   </Card>;
@@ -37995,7 +38008,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.38';
+const TB_VERSION='v10.39';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38145,6 +38158,7 @@ const TB_PRICE_SEC={   /* 음성 1초당 */
 };
 const TB_PRICE_TOK={   /* 100만 토큰당 [입력, 출력] */
   'claude-haiku-5-5':[0.1,0.5],'claude-haiku-4-5-20251001':[1,5],
+  'qwen3.5-flash':[0.1,0.4],'qwen3.5-plus':[0.4,2.4],'qwen-flash':[0.05,0.4],'qwen-plus':[0.4,1.2],'qwen-max':[1.6,6.4],   /* Alibaba 싱가포르 목록가(2026-10) */
   'claude-sonnet-5':[2,10],'claude-sonnet-5-5':[2,10],'claude-opus-5':[5,25],'claude-opus-5-5':[4,20],
 };
 const tbCost=r=>{const t=TB_PRICE_TOK[r.model];
