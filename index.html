@@ -38222,7 +38222,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.59';
+const TB_VERSION='v10.60';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39410,7 +39410,7 @@ function TbShell({user,role,onLogout}){
   if(TB_EMBED)return <div style={{minHeight:'100vh',background:'#fff'}}>
     <main style={{padding:'8px 10px 16px'}}>
       {loadErr&&<InfoBar tone="warn">기록을 불러오지 못했습니다 — {loadErr}</InfoBar>}
-      {cal&&<div style={{fontSize:12,color:'var(--text-muted)',marginBottom:6}}>📅 『{cal.title||'(제목 없음)'}』 녹취 — 정지하고 정리가 끝나면 이 일정 메모에 들어갑니다 · <a href={location.pathname} target="_blank" rel="noopener" style={{color:'var(--color-accent, #2563eb)'}}>통번역 앱 크게 열기</a></div>}
+      {cal&&<div style={{fontSize:12,color:'var(--text-muted)',marginBottom:6}}>📅 『{cal.title||'(제목 없음)'}』 녹취 — 정지하고 정리가 끝나면 이 일정 메모에 들어갑니다</div>}
       {newVer&&<div style={{marginBottom:10}}><InfoBar tone="warn">🔄 새 버전({newVer})이 나왔습니다. 녹음을 마친 뒤 일정 창을 닫고 다시 열어 주세요.</InfoBar></div>}
       {recs===null&&!loadErr?<div style={{color:'var(--text-label)',padding:30}}>불러오는 중…</div>:<>
         <div style={{display:tab==='live'?'block':'none'}}>
