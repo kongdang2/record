@@ -38229,7 +38229,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.61';
+const TB_VERSION='v10.62';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38834,8 +38834,8 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   };
   /* 받아쓰기와 다듬기·번역을 함께 돌린다 — 조각이 받아써지는 대로 차례로 번역해 기록에 쌓는다 */
   const runSttInner=async(rec0,lng)=>{
-    let rec=rec0;const refs=audioRefs(rec.md);const file=local.current[rec.id];
-    if(!refs.length&&!file){toast('이 기록에 녹음이 없습니다');return;}
+    let rec=rec0;const refs=audioRefs(rec.md);const lf=local.current[rec.id];const files=lf?(Array.isArray(lf)?lf:[lf]):[];   /* v10.62: 여러 파일 */
+    if(!refs.length&&!files.length){toast('이 기록에 녹음이 없습니다');return;}
     const sttM=tbApplyStt();const sttN=tbSttName(sttM);const pm=modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id);
     let sttMsg='받아쓰는 중…',polMsg='';const busy=()=>setBusy(sttMsg+' ('+sttN+')'+(polMsg?' · '+polMsg+' ('+pm+')':''));busy();
     const base=rec.md;const rawParts=[];let res=null,transcribing=true,total=0,polishErr=null;
@@ -38848,7 +38848,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       onStep:m=>{polMsg=m;busy();},onProgress:p=>{res=p;render();}}).catch(e=>{polishErr=e;return null;});
     try{
       let secs=0,tOff=0;
-      const jobs=file?[{name:file.name,blob:file}]:refs.map((r,i)=>({name:((/\[([^\]]*)\]/.exec(r.raw)||[])[1]||('녹음 '+(i+1))).replace(/^🎙\s*/,''),path:r.path}));
+      const jobs=files.length?files.map(f=>({name:f.name,blob:f})):refs.map((r,i)=>({name:((/\[([^\]]*)\]/.exec(r.raw)||[])[1]||('녹음 '+(i+1))).replace(/^🎙\s*/,''),path:r.path}));
       for(let i=0;i<jobs.length;i++){
         const j=jobs[i];const tag=jobs.length>1?(' '+(i+1)+'/'+jobs.length):'';
         sttMsg='녹음 불러오는 중'+tag+'…';busy();
@@ -38910,15 +38910,23 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     setBusy('');
   };
   /* 음성 파일 → 새 기록 → 전사 */
-  const onFile=async(f,lng)=>{
-    if(!f)return;const t=f.name.replace(/\.[^.]+$/,'');lng=lng||lang;
+  /* v10.62: 여러 파일을 한 번에 — 파일명 순서(숫자 인식)로 이어 받아쓰고, 정리는 하나의 기록으로 합친다 */
+  const onFile=async(fs,lng)=>{
+    fs=(Array.isArray(fs)?fs:[fs]).filter(Boolean).sort((a,b)=>a.name.localeCompare(b.name,'ko',{numeric:true,sensitivity:'base'}));
+    if(!fs.length)return;const f=fs[0];lng=lng||lang;
+    const t=f.name.replace(/\.[^.]+$/,'')+(fs.length>1?' 외 '+(fs.length-1)+'개':'');
     const lname=(TB_LANGS.find(l=>l.id===lng)||{}).label||lng;
-    const rec={...newNote(t,'work','# '+t+'\n\n> 🎙 '+f.name+' · '+(f.size/1048576).toFixed(1)+'MB · '+lname+' · '+new Date().toLocaleString('ko-KR')+'\n',['전사']),lang:lng};
-    local.current[rec.id]=f;
-    if(f.size<=15*1024*1024){
-      try{setBusy('녹음 올리는 중…');const r=await Files.put(f);rec.md+='\n[🎙 '+f.name+'](pms:'+r.path+')\n';}
-      catch(e){console.warn('녹음 올리기 실패',e);}
-    }else rec.md+='\n> 원본이 15MB를 넘어 저장하지 않았습니다 — 글로 옮긴 결과만 남습니다\n';
+    const mb=fs.reduce((n,x)=>n+x.size,0)/1048576;
+    const head=fs.length>1?'🎙 파일 '+fs.length+'개 · '+mb.toFixed(1)+'MB':'🎙 '+f.name+' · '+mb.toFixed(1)+'MB';
+    const rec={...newNote(t,'work','# '+t+'\n\n> '+head+' · '+lname+' · '+new Date().toLocaleString('ko-KR')+'\n'+(fs.length>1?'\n> 순서: '+fs.map((x,i)=>(i+1)+'. '+x.name).join(' · ')+'\n':''),['전사']),lang:lng};
+    local.current[rec.id]=fs.length>1?fs:f;
+    let big=0;
+    for(let i=0;i<fs.length;i++){const x=fs[i];
+      if(x.size<=15*1024*1024){
+        try{setBusy('녹음 올리는 중'+(fs.length>1?' '+(i+1)+'/'+fs.length:'')+'…');const r=await Files.put(x);rec.md+='\n[🎙 '+x.name+'](pms:'+r.path+')\n';}
+        catch(e){console.warn('녹음 올리기 실패',e);}
+      }else big++;}
+    if(big)rec.md+='\n> '+(fs.length>1?big+'개 파일이':'원본이')+' 15MB를 넘어 저장하지 않았습니다 — 글로 옮긴 결과만 남습니다\n';
     addRec(rec);setSel(rec.id);setBusy('');
     setTimeout(()=>runStt(rec,lng),50);
   };
@@ -38992,12 +39000,12 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
 
   /* 파일을 고르기 전에 녹음 언어부터 고른다 — 고른 언어는 다음에도 기본으로 */
   const pickLang=l=>{setLangOpen(false);upLang.current=l;setLang(l);Store.saveCfg({sttLang:l});document.getElementById('tbAudioIn').click();};
-  const upBtn=<><Button icon="🎙" disabled={!!busy} onClick={()=>setLangOpen(true)} title="녹음 언어를 고른 뒤 파일을 올리면 받아쓰기 → 정리까지 이어서 합니다">음성 파일 전사</Button>
-      <input id="tbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp,.ogg" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';onFile(f,upLang.current);}}/>
+  const upBtn=<><Button icon="🎙" disabled={!!busy} onClick={()=>setLangOpen(true)} title="녹음 언어를 고른 뒤 파일을 올리면 받아쓰기 → 정리까지 이어서 합니다. 여러 파일을 함께 고르면 파일명 순서로 이어 붙여 하나의 기록으로 정리합니다">음성 파일 전사</Button>
+      <input id="tbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp,.ogg" style={{display:'none'}} multiple onChange={e=>{const fs=[...(e.target.files||[])];e.target.value='';onFile(fs,upLang.current);}}/>
       <Modal open={langOpen} onClose={()=>setLangOpen(false)} title="🎙 녹음에서 말하는 언어" width={380}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
           {TB_LANGS.map(l=><Button key={l.id} variant={l.id===lang?'primary':'gray'} onClick={()=>pickLang(l.id)}>{l.id===lang?'✓ ':''}{l.label}</Button>)}</div>
-        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:10,lineHeight:1.6}}>고르면 바로 파일 선택 창이 열립니다. 결과는 개요 → 주제별 헤드라인 → 개조식 정리 순으로 회의록 모양이 되고, 한국어 녹음은 번역 없이 만듭니다.</div>
+        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:10,lineHeight:1.6}}>고르면 바로 파일 선택 창이 열립니다(여러 파일을 함께 고르면 파일명 순서로 이어 붙여 하나로 정리). 결과는 개요 → 주제별 헤드라인 → 개조식 정리 순으로 회의록 모양이 되고, 한국어 녹음은 번역 없이 만듭니다.</div>
       </Modal></>;
   return <Card title="📝 번역/정리" badge={<Badge tone="muted">{recs.length}개</Badge>}
     {...(mobile?{toolbarRight:upBtn}:{toolbar:upBtn})}>
