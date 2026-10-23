@@ -36872,7 +36872,7 @@ const LIVE_LANGS=[{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',
 /* 일정앱에서 건너온 링크(v10.56) — #cal=일정id&date=…&title=…&lang=ko|en|ja|zh&back=돌아갈 주소 (녹취를 그 일정에 연결) 또는 #rec=기록id (기록 바로 열기).
    한 번 읽고 주소에서 지운다. 일정 연결은 이 탭이 살아 있는 동안 남는다(새로고침해도) */
 const TB_LINK=(()=>{try{const h=new URLSearchParams(location.hash.slice(1));
-  if(h.get('cal')||h.get('rec')){const o={ev:h.get('cal')||'',date:h.get('date')||'',title:h.get('title')||'',lang:h.get('lang')||'',rec:h.get('rec')||'',back:h.get('back')||'',embed:h.get('embed')==='1'};
+  if(h.get('cal')||h.get('rec')){const o={ev:h.get('cal')||'',date:h.get('date')||'',title:h.get('title')||'',lang:h.get('lang')||'',rec:h.get('rec')||'',back:h.get('back')||'',embed:h.get('embed')==='1',file:h.get('file')==='1'};
     if(o.ev)sessionStorage.setItem('tb.link',JSON.stringify(o));history.replaceState(null,'',location.pathname);return o;}
   const sv=sessionStorage.getItem('tb.link');if(sv)return JSON.parse(sv);}catch(_){}return null;})();
 const tbLinkClear=()=>{try{sessionStorage.removeItem('tb.link');}catch(_){}};
@@ -38229,7 +38229,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.62';
+const TB_VERSION='v10.63';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38798,6 +38798,7 @@ function TbExportDlg({rec,onClose,toast}){
 function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,clearAuto}){
   const {Card,Button,Badge,InfoBar,Modal}=window.HDWorkbookDesignSystem_ad60e4;
   const [langOpen,setLangOpen]=React.useState(false);const upLang=React.useRef(null);
+  React.useEffect(()=>{if(TB_EMBED&&TB_LINK&&TB_LINK.file)setLangOpen(true);},[]);   /* 일정앱 상자 안 「음성 파일로 전사」 — 열리자마자 언어 고르기부터 */
   const mobile=useMobile();
   const cur=recs.find(r=>r.id===sel)||null;
   const [busy,setBusy]=React.useState('');const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
@@ -38874,9 +38875,9 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       const done=await polishP;
       if(done){res=done;render();TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');toast(done.korean?'전사·정리 완료':'전사·번역 완료');
         if(rec.cal)tbCalExport(rec,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));}
-      else toast('⚠ 정리·번역 실패 — '+(polishErr&&polishErr.message||'알 수 없는 오류')+' · 받아쓴 글은 남아 있으니 ✨ 정리하기로 다시 하세요');
+      else {toast('⚠ 정리·번역 실패 — '+(polishErr&&polishErr.message||'알 수 없는 오류')+' · 받아쓴 글은 남아 있으니 ✨ 정리하기로 다시 하세요');if(rec.cal)tbPost({state:'stopped'});}
     }catch(e){
-      transcribing=false;q.end();
+      transcribing=false;q.end();if(rec0.cal)tbPost({state:'stopped'});
       console.error('[통번역 전사 실패]',e);
       toast('⚠ 전사 실패 — '+e.message);
       render();upd(rec.id,{md:rec.md+'\n\n> ⚠ 전사 실패 — '+e.message+'\n'});
@@ -38906,7 +38907,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       const fin={...rec,md:putPolish(md0,out,pm,segs.length)};upd(rec.id,{md:fin.md});
       toast(out.korean?'정리 완료':'정리·번역 완료');
       if(rec.cal)await tbCalExport(fin,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));
-    }catch(e){toast('⚠ 정리·번역 실패 — '+e.message);}
+    }catch(e){toast('⚠ 정리·번역 실패 — '+e.message);if(rec.cal)tbPost({state:'stopped'});}
     setBusy('');
   };
   /* 음성 파일 → 새 기록 → 전사 */
@@ -38920,6 +38921,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     const head=fs.length>1?'🎙 파일 '+fs.length+'개 · '+mb.toFixed(1)+'MB':'🎙 '+f.name+' · '+mb.toFixed(1)+'MB';
     const rec={...newNote(t,'work','# '+t+'\n\n> '+head+' · '+lname+' · '+new Date().toLocaleString('ko-KR')+'\n'+(fs.length>1?'\n> 순서: '+fs.map((x,i)=>(i+1)+'. '+x.name).join(' · ')+'\n':''),['전사']),lang:lng};
     local.current[rec.id]=fs.length>1?fs:f;
+    if(LIVE.cal&&LIVE.cal.ev){rec.cal={ev:LIVE.cal.ev,date:LIVE.cal.date,title:LIVE.cal.title};tbPost({state:'live'});}   /* 일정앱에서 연결해 온 탭 — 전사·정리가 끝나면 그 일정에 넣는다(v10.63) */
     let big=0;
     for(let i=0;i<fs.length;i++){const x=fs[i];
       if(x.size<=15*1024*1024){
@@ -39359,7 +39361,7 @@ function TbShell({user,role,onLogout}){
   const NS=window.HDWorkbookDesignSystem_ad60e4;const {AppHeader,Button,Toast,InfoBar}=NS;
   const mobile=useMobile();
   /* 설정은 관리자만 — 팀원은 통역·번역/정리 두 화면만 쓴다 */
-  const [tab,setTab]=React.useState(()=>{if(TB_LINK&&TB_LINK.rec)return 'rec';if(TB_LINK&&TB_LINK.ev)return 'live';try{let t=localStorage.getItem('tb.tab')||'live';if(t==='team')t='me';return (t==='me'&&role!=='owner')?'live':t;}catch(_){return 'live';}});
+  const [tab,setTab]=React.useState(()=>{if(TB_LINK&&TB_LINK.rec)return 'rec';if(TB_LINK&&TB_LINK.ev)return TB_LINK.file?'rec':'live';try{let t=localStorage.getItem('tb.tab')||'live';if(t==='team')t='me';return (t==='me'&&role!=='owner')?'live':t;}catch(_){return 'live';}});
   const [recs,setRecs]=React.useState(null);const [sel,setSel]=React.useState(TB_LINK&&TB_LINK.rec||null);const [cal,setCal]=React.useState(LIVE.cal);const [autoStt,setAutoStt]=React.useState(null);
   const [toastMsg,setToastMsg]=React.useState('');const [loadErr,setLoadErr]=React.useState('');
   const recsRef=React.useRef([]);const timers=React.useRef({});
@@ -39425,7 +39427,7 @@ function TbShell({user,role,onLogout}){
   if(TB_EMBED)return <div style={{minHeight:'100vh',background:'#fff'}}>
     <main style={{padding:'8px 10px 16px'}}>
       {loadErr&&<InfoBar tone="warn">기록을 불러오지 못했습니다 — {loadErr}</InfoBar>}
-      {cal&&<div style={{fontSize:12,color:'var(--text-muted)',marginBottom:6}}>📅 『{cal.title||'(제목 없음)'}』 녹취 — 정지하고 정리가 끝나면 이 일정 메모에 들어갑니다</div>}
+      {cal&&<div style={{fontSize:12,color:'var(--text-muted)',marginBottom:6}}>📅 『{cal.title||'(제목 없음)'}』 {TB_LINK&&TB_LINK.file?'음성 파일 전사 — 전사·정리가 끝나면':'녹취 — 정지하고 정리가 끝나면'} 이 일정 메모에 들어갑니다</div>}
       {newVer&&<div style={{marginBottom:10}}><InfoBar tone="warn">🔄 새 버전({newVer})이 나왔습니다. 녹음을 마친 뒤 일정 창을 닫고 다시 열어 주세요.</InfoBar></div>}
       {recs===null&&!loadErr?<div style={{color:'var(--text-label)',padding:30}}>불러오는 중…</div>:<>
         <div style={{display:tab==='live'?'block':'none'}}>
