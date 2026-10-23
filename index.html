@@ -38022,52 +38022,79 @@ const MINUTES_RULES='규칙: 개조식(명사형으로 끝맺음, 「~했습니�
   +' 숫자·기한·고유명사는 그대로 살리되, 받아쓰기가 불분명해 확실하지 않은 수치는 빼거나 (?)를 붙인다.'
   +' 정해진 것은 「→ 결정: 」, 해야 할 일은 「→ 할 일: 」로 항목 끝에 적는다.'
   +' 녹취에 없는 내용은 지어내지 않는다. 인사·잡담·같은 말 되묻기는 뺀다.';
-/* 주제별 정리의 틀 — 보통은 주제 단위, 준비한 질문에 답하는 회의면 질문 단위 */
-const MINUTES_SHAPE='주제마다 「#### 번호. 헤드라인」 한 줄, 그 아래 개조식 항목 「- 」. 주제 안에서는 말한 흐름(소개·설명 → 논의 → 질의응답 → 결정)대로 적는다.'
-  +' 회의가 준비한 질문에 답하는 질의응답 중심이면 주제 대신 질문 단위로 묶는다: 「#### Q번호. 질문 요지」 아래 답변 내용을 「- 」 항목으로, 필요하면 끝에 「- 정리: 」 한 줄.';
 const MINUTES_FORM='\n\n다른 말 없이 아래 형식으로만 출력한다.\n===개요===\n(개요)\n===정리===\n(주제별 정리)';
+/* v10.68: 정리 유형(opt.type) — seq 녹취 순서대로(기본) · topic 주제별 재배치 · qa 질의응답(질문 단위). opt.extra = 사용자가 AI에게 직접 적은 요청.
+   답이 길이 한도에 잘리면(끝 표시 ===끝=== 없음) 마지막 완결된 줄 뒤부터 이어서 받는다(최대 2번) */
+const MINUTES_TYPES=[{id:'seq',label:'녹취 순서대로',desc:'말한 순서 그대로, 주제가 바뀌는 곳마다 소제목'},{id:'qa',label:'질의응답(Q&A)',desc:'질문이 나온 순서대로 Q1·Q2… 질문 단위로 묶음'},{id:'topic',label:'주제별 재배치',desc:'전체를 주제별로 다시 모음(순서 바뀜)'}];
+const MINUTES_END='===끝===';
+const minutesShape=type=>type==='qa'
+  ?'질문 단위로 묶는다: 질문이 나온 순서대로 「#### Q번호. 질문 요지」 한 줄, 그 아래 답변 내용을 「- 」 항목으로(질문자·답변자가 드러나게), 필요하면 끝에 「- 정리: 」 한 줄. 질문이 아닌 소개·설명·논의는 그 자리에 「#### 번호. 헤드라인」으로 둔다. 순서를 바꾸지 않는다.'
+  :type==='topic'
+  ?'주제마다 「#### 번호. 헤드라인」 한 줄, 그 아래 개조식 항목 「- 」. 전체를 주제별로 다시 모으고, 주제 안에서는 말한 흐름(소개·설명 → 논의 → 질의응답 → 결정)대로 적는다.'
+  :'녹취 순서대로 적는다: 말한 순서를 바꾸지 않고, 주제가 바뀌는 곳마다 「#### 번호. 헤드라인」 한 줄을 두고 그 아래 개조식 항목 「- 」. 같은 주제가 뒤에 다시 나와도 앞으로 옮기지 않고 그 자리에 둔다. 질문과 답변이 오가면 「(질의) … → (답변) …」로 한 항목에 묶는다.';
+const minutesCount=type=>type==='qa'?'질문 수만큼':type==='topic'?'3~10개':'내용에 맞게(보통 4~12개)';
+/* 잘린 답 이어 받기 — 프롬프트는 끝에 ===끝=== 을 요구한다 */
+async function askLong(q,o,log){
+  const endRe=/===\s*끝\s*===\s*$/;
+  let t=String(await askClaude(q,o)||'').trim();
+  for(let n=0;n<2&&!endRe.test(t);n++){
+    log&&log('답이 길어 이어 받는 중…'+(n?' ('+(n+1)+')':''));
+    const cut=t.lastIndexOf('\n');const kept=cut>0?t.slice(0,cut):t;   /* 마지막 줄은 잘렸을 수 있으니 버리고 그 앞까지 */
+    const more=String(await askClaude(q+'\n\n--- 지금까지 쓴 답(길이 한도에 걸려 중간에 잘림, 끝부분) ---\n'+kept.slice(-2500)
+      +'\n\n위 답의 마지막 줄 바로 다음부터 나머지만 이어서 쓴다. 앞에 쓴 내용은 반복하지 않는다. 다 쓰면 마지막 줄에 '+MINUTES_END,o)||'').trim();
+    t=kept+'\n'+more.replace(/^===\s*(개요|정리)\s*===\s*\n?/gm,'');
+  }
+  return t.replace(/===\s*끝\s*===/g,'').trim();
+}
 async function meetingMinutes(korean,opt={}){
   const topic=opt.topic?('\n이 회의의 분야·주제: '+opt.topic):'';
+  const type=MINUTES_TYPES.some(x=>x.id===opt.type)?opt.type:'seq';
+  const extra=String(opt.extra||'').trim()?'\n\n[사용자 추가 요청 — 위 규칙보다 우선] '+String(opt.extra).trim():'';
+  const endNote='\n다 쓰면 마지막 줄에 '+MINUTES_END+' 을 적는다.';
   const blocks=splitChunks(korean,MINUTES_BLOCK);
-  const pick=r=>({overview:grabSec(r,'개요'),themed:grabSec(r,'정리')||(r||'').trim()});
+  const strip=t=>String(t||'').replace(/^===\s*[^=\n]+===\s*$/gm,'').trim();
+  const pick=r=>({overview:strip(grabSec(r,'개요')),themed:strip(grabSec(r,'정리')||r)});
+  const fixOverview=async(mm)=>{   /* 개요가 비면 정리를 보고 한 번 더 */
+    if(mm.overview||!mm.themed)return mm;
+    try{mm.overview=strip(await askClaude('아래 회의록 정리를 보고, 이 회의의 목적·진행 방식과 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작. 다른 말 없이 결과만 출력한다.'+topic
+      +'\n'+MINUTES_RULES+extra+'\n\n--- 정리 ---\n'+mm.themed,{max_tokens:1200}));}catch(_){}
+    return mm;};
   if(blocks.length<=1){
     opt.onStep&&opt.onStep('회의록으로 묶는 중…');
-    const r=await askClaude(
+    const r=await askLong(
       '아래는 회의 녹취를 한국어로 정리한 글이다. 회의록으로 다시 묶어라.'+topic
       +'\n\n===개요=== 절: 이 회의의 목적·진행 방식과, 무엇을 다뤘고 무엇이 정해졌는지 3~5줄, 각 줄 「- 」로 시작.'
-      +'\n===정리=== 절: 전체 내용을 주제 3~8개(질의응답 중심이면 질문 수만큼)로 분류한다. '+MINUTES_SHAPE
-      +' 중요한 내용·수치는 빠뜨리지 않는다.\n'+MINUTES_RULES+MINUTES_FORM
-      +'\n\n--- 정리한 글 ---\n'+korean,{max_tokens:5000});
-    return pick(r);
+      +'\n===정리=== 절: '+minutesShape(type)+' 주제 수는 '+minutesCount(type)+'.'
+      +' 중요한 내용·수치는 빠뜨리지 않는다.\n'+MINUTES_RULES+extra+MINUTES_FORM+endNote
+      +'\n\n--- 정리한 글 ---\n'+korean,{max_tokens:6000},opt.onStep);
+    return fixOverview(pick(r));
   }
   const drafts=[];
   for(let i=0;i<blocks.length;i++){
     opt.onStep&&opt.onStep('주제별로 묶는 중 '+(i+1)+'/'+blocks.length);
-    const r=await askClaude(
+    const r=await askLong(
       '아래는 회의 녹취를 한국어로 정리한 글의 일부다('+(i+1)+'/'+blocks.length+').'+topic
-      +'\n이 부분의 내용을 주제별로 분류해, 주제마다 「#### 헤드라인」 한 줄과 그 아래 개조식 항목(「- 」)으로 적는다. 번호는 붙이지 않는다.'
-      +' 준비한 질문에 답하는 질의응답이 중심이면 질문마다 「#### Q. 질문 요지」 한 줄과 그 아래 답변 항목으로 적는다.'
-      +' 중요한 내용·수치는 빠뜨리지 않는다.\n'+MINUTES_RULES
-      +'\n\n다른 말 없이 결과만 출력한다.\n\n--- 정리한 글 ---\n'+blocks[i],{max_tokens:3000});
+      +'\n이 부분의 내용을 '+(type==='qa'?'질문 단위로(「#### Q. 질문 요지」 한 줄과 그 아래 답변 항목 「- 」, 질문이 아닌 부분은 「#### 헤드라인」)':'주제가 바뀌는 곳마다 「#### 헤드라인」 한 줄과 그 아래 개조식 항목 「- 」으로')+' 적는다. 번호는 붙이지 않는다.'
+      +(type==='topic'?'':' 말한 순서를 바꾸지 않는다.')
+      +' 중요한 내용·수치는 빠뜨리지 않는다.\n'+MINUTES_RULES+extra
+      +'\n\n다른 말 없이 결과만 출력한다.'+endNote+'\n\n--- 정리한 글 ---\n'+blocks[i],{max_tokens:4000},opt.onStep);
     drafts.push((r||'').trim());
   }
-  /* v10.64: 개요와 주제 합치기를 동시에(따로) 부른다 — 한 번에 부르면 답이 길어 서버 한도(150초)에 걸려 실패하거나 몇 분씩 걸렸다. 한 번 실패하면 한 번 더 */
+  /* 개요와 합치기를 동시에(따로) 부른다 — 한 번에 부르면 답이 길어 서버 한도(150초)에 걸려 실패하거나 몇 분씩 걸렸다. 한 번 실패하면 한 번 더 */
   opt.onStep&&opt.onStep('주제 합치고 개요 쓰는 중…');
   const all=drafts.join('\n\n---\n\n');
-  const ask2=async(q,o)=>{try{return await askClaude(q,o);}catch(e){await new Promise(ok=>setTimeout(ok,1500));return askClaude(q,o);}};
+  const ask2=async(fn)=>{try{return await fn();}catch(e){await new Promise(ok=>setTimeout(ok,1500));return fn();}};
   const [ov,th]=await Promise.all([
-    ask2('아래는 한 회의의 녹취를 부분별로 주제 분류한 초안들이다. 이 회의의 목적·진행 방식과, 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작하고 수치·결정은 정확히. 다른 말 없이 결과만 출력한다.'+topic
-      +'\n'+MINUTES_RULES+'\n\n--- 초안들 ---\n'+all,{max_tokens:1200}),
-    ask2('아래는 한 회의의 녹취를 부분별로 주제 분류한 초안들이다. 하나의 회의록 정리로 합쳐라.'+topic
-      +'\n같은 주제(같은 질문)는 하나로 합치고 겹치는 항목은 하나만 남긴다. 주제 3~10개(질의응답 중심이면 질문 수만큼). '+MINUTES_SHAPE
-      +' 항목을 요약해 줄이지 말고 내용은 다 살린다. 개요는 쓰지 않는다. 다른 말 없이 결과만 출력한다.\n'+MINUTES_RULES
-      +'\n\n--- 초안들 ---\n'+all,{max_tokens:5000})]);
-  const strip=t=>String(t||'').replace(/^===\s*[^=]+===\s*$/gm,'').trim();
-  let overview=strip(grabSec(ov,'개요')||ov);
-  /* v10.66: 개요가 빈 답으로 와서 「개요를 만들지 못했습니다」만 남던 경우 — 다 묶인 주제별 정리로 한 번 더 쓴다 */
-  if(!overview&&th){try{overview=strip(await askClaude('아래 회의록 정리를 보고, 이 회의의 목적·진행 방식과 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작. 다른 말 없이 결과만 출력한다.'+topic
-    +'\n'+MINUTES_RULES+'\n\n--- 정리 ---\n'+strip(grabSec(th,'정리')||th),{max_tokens:1200}));}catch(_){}}
-  return {overview,themed:strip(grabSec(th,'정리')||th)};
+    ask2(()=>askClaude('아래는 한 회의의 녹취를 부분별로 묶은 초안들이다. 이 회의의 목적·진행 방식과, 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작하고 수치·결정은 정확히. 다른 말 없이 결과만 출력한다.'+topic
+      +'\n'+MINUTES_RULES+extra+'\n\n--- 초안들 ---\n'+all,{max_tokens:1200})),
+    ask2(()=>askLong('아래는 한 회의의 녹취를 부분별로 묶은 초안들이다(녹취 순서). 하나의 회의록 정리로 합쳐라.'+topic
+      +(type==='topic'
+        ?'\n같은 주제는 하나로 합치고 겹치는 항목은 하나만 남긴다. 주제 3~10개. '
+        :'\n초안의 순서를 그대로 잇는다. 초안 경계에서 같은 주제(같은 질문)가 이어지면 하나로 합치고, 겹치는 항목은 하나만 남긴다. 소제목 번호는 1부터 다시 매긴다. ')
+      +minutesShape(type)
+      +' 항목을 요약해 줄이지 말고 내용은 다 살린다. 개요는 쓰지 않는다. 다른 말 없이 결과만 출력한다.\n'+MINUTES_RULES+extra+endNote
+      +'\n\n--- 초안들 ---\n'+all,{max_tokens:8000},opt.onStep))]);
+  return fixOverview({overview:strip(grabSec(ov,'개요')||ov),themed:strip(grabSec(th,'정리')||th)});
 }
 /* 정리 절 머리: 분야·교정표 메모 + 개요 + 주제별 정리 */
 function minutesMd(fx,mm){
@@ -38174,7 +38201,7 @@ async function polishStream(src,opt={}){
     opt.onProgress&&opt.onProgress({korean,fx,segs:segs.slice()});
   }
   if(!segs.length)throw new Error('정리할 글이 없습니다');
-  const mm=await meetingMinutes(segs.map(s=>s.ko).join('\n\n'),{topic:fx.topic,onStep:opt.onStep});
+  const mm=await meetingMinutes(segs.map(s=>s.ko).join('\n\n'),{topic:fx.topic,onStep:opt.onStep,type:opt.mtype,extra:opt.mextra});
   const res={korean,fx,segs,mm};res.md=segsMd(res);return res;
 }
 /* 정리 도중 끊긴 기록에서 이미 끝낸 조각 읽기 — 진행 줄(⏳)이 남아 있고 조각마다 시각 머리(####)가 있을 때만 */
@@ -38208,7 +38235,7 @@ function segsMd({korean,fx,segs,mm,progress}){
 /* 예전 이름 그대로 쓰는 곳(일정관리 앱 등)을 위해 남겨 둔다 — 결과는 정리 절 본문(마크다운) */
 async function polishTranscript(raw,opt={}){return (await polishStream(parseSegs(raw),opt)).md;}
 async function polishKorean(raw,opt={}){return polishTranscript(raw,{...opt,korean:true});}
-Object.assign(window,{polishTranscript,polishKorean,polishStream,parsePolished,polishSegZh,polishSegKo,parseSegs,segsMd,TbSegQueue,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
+Object.assign(window,{MINUTES_TYPES,askLong,polishTranscript,polishKorean,polishStream,parsePolished,polishSegZh,polishSegKo,parseSegs,segsMd,TbSegQueue,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
 </script>
 <script type="text/babel">/* ── ZIP 만들기 (Word 파일 저장에 쓴다) ─────────────────────
    외부 라이브러리 없이 직접 구현했다. 압축 없이 저장(store)한다 */
@@ -38252,7 +38279,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.67';
+const TB_VERSION='v10.68';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38829,6 +38856,13 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   const elapsed=()=>{const s=Math.floor((Date.now()-busyAt.current)/1000);return s<60?s+'초':Math.floor(s/60)+'분 '+String(s%60).padStart(2,'0')+'초';};
   const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
   const [tidyOpen,setTidyOpen]=React.useState(false);   /* ✨ 정리하기 선택창(v10.65) */
+  const [askOpen,setAskOpen]=React.useState(false);const [askTxt,setAskTxt]=React.useState('');   /* 💬 AI에게 요청(v10.68) */
+  const [,tickType]=React.useReducer(x=>x+1,0);
+  /* 정리 유형 고르기 — 기록에 저장(rec.mtype), 새 기록 기본값은 설정(tbMinutesType) */
+  const TypePick=({rec})=>{const v=(rec&&rec.mtype)||Store.cfg.tbMinutesType||'seq';
+    return <div style={{marginTop:8,fontSize:'var(--fs-sm2)'}}><div style={{color:'var(--text-label)',marginBottom:4}}>정리 유형</div>
+      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>{MINUTES_TYPES.map(t=><label key={t.id} style={{cursor:'pointer'}} title={t.desc}><input type="radio" name="tbMType" checked={v===t.id} onChange={()=>{Store.saveCfg({tbMinutesType:t.id});if(rec)upd(rec.id,{mtype:t.id});tickType();}}/> {t.label}</label>)}</div>
+      <div style={{color:'var(--text-label)',marginTop:3}}>{(MINUTES_TYPES.find(t=>t.id===v)||{}).desc}</div></div>;};
   const [q,setQ]=React.useState('');const [confirmDel,setConfirmDel]=React.useState(false);const [toCal,setToCal]=React.useState(false);
   /* 체크박스로 여러 개 골라 지우기 */
   const [pick,setPick]=React.useState(()=>new Set());const [askMany,setAskMany]=React.useState(false);const [delBusy,setDelBusy]=React.useState(false);
@@ -38872,7 +38906,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       if(res)md=putPolish(md,res,pm,transcribing?0:total);
       rec={...rec,md};upd(rec.id,{md});};
     const q=new TbSegQueue();
-    const polishP=polishStream(q,{hint:Store.cfg.sttHint,korean:lng==='ko'?true:(lng&&lng!=='auto'?false:undefined),
+    const polishP=polishStream(q,{hint:Store.cfg.sttHint,korean:lng==='ko'?true:(lng&&lng!=='auto'?false:undefined),mtype:rec.mtype||Store.cfg.tbMinutesType,mextra:rec.mreq,
       onStep:m=>{polMsg=m;busy();},onProgress:p=>{res=p;render();}}).catch(e=>{polishErr=e;return null;});
     try{
       let secs=0,tOff=0;
@@ -38911,6 +38945,26 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     }
     setBusy('');
   };
+  /* v10.68: 녹취에 대해 물어보기 — 정리는 바꾸지 않고 답을 기록 끝 「AI 메모」 절에 쌓는다 */
+  const runAsk=async(rec,q)=>{
+    if(TB_JOBS.has(rec.id)){toast('이 기록은 정리 중입니다 — 끝난 뒤 다시 요청하세요');return;}
+    TB_JOBS.add(rec.id);const pm=modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id);setBusy('AI에게 묻는 중… ('+pm+')');
+    try{
+      const pre=parsePolished(rec.md,true);
+      const src=pre&&pre.segs.length?pre.segs.map(x=>(x.label?'['+x.label+'] ':'')+x.ko).join('\n\n')
+        :(tbSection(rec.md,'녹취')||tbSection(rec.md,'실시간 원문')).replace(/^>.*$/gm,'').trim();
+      const minutes=(tbSection(rec.md,'정리·번역')||tbSection(rec.md,'정리')).split(/\n###\s*(?:번역 · 원문|정리본) \(조각별\)/)[0].trim();
+      const a=await askClaude('아래는 회의 녹취를 정리한 글과 회의록이다. 사용자의 요청에 녹취 내용을 근거로 한국어로 답한다. 녹취에 없는 내용은 지어내지 않고 「녹취에 없음」이라고 한다. 개조식이 어울리면 개조식으로, 설명이 필요하면 짧은 문장으로. 다른 말 없이 답만 쓴다.'
+        +'\n\n--- 요청 ---\n'+q+(minutes?'\n\n--- 회의록(개요·주제별) ---\n'+minutes.slice(0,8000):'')+'\n\n--- 녹취 정리 ---\n'+src.slice(0,60000),{max_tokens:4000,usageTag:'AI 요청'});
+      const ans=String(a||'').trim()||'(답이 비었습니다)';
+      const stamp=new Date().toLocaleString('ko-KR');
+      const cur2=recs.find(r=>r.id===rec.id)||rec;
+      upd(rec.id,{md:cur2.md.replace(/\s+$/,'')+'\n\n## AI 메모\n> '+stamp+' · 요청: '+q.replace(/\n/g,' ')+'\n\n'+ans+'\n'});
+      TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');toast('AI 답을 기록 끝 「AI 메모」에 붙였습니다');
+    }catch(e){toast('⚠ AI 요청 실패 — '+e.message);}
+    finally{TB_JOBS.delete(rec.id);}
+    setBusy('');
+  };
   /* v10.65: 조각별 정리는 그대로 두고 개요·주제별 정리만 다시 만든다 — 조각은 다시 부르지 않으니 빠르고 싸다 */
   const runMinutes=async(rec)=>{
     if(TB_JOBS.has(rec.id)){toast('이 기록은 이미 정리 중입니다 — 끝날 때까지 기다려 주세요');return;}
@@ -38920,7 +38974,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     const pm=modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id);
     setBusy('개요·주제별 정리 준비 중… ('+pm+')');
     try{
-      const mm=await meetingMinutes(pre.segs.map(x=>x.ko).join('\n\n'),{topic:pre.fx.topic,onStep:m=>setBusy(m+' ('+pm+')')});
+      const mm=await meetingMinutes(pre.segs.map(x=>x.ko).join('\n\n'),{topic:pre.fx.topic,onStep:m=>setBusy(m+' ('+pm+')'),type:rec.mtype||Store.cfg.tbMinutesType,extra:rec.mreq});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
       const fin={...rec,md:putPolish(rec.md,{korean:pre.korean,fx:pre.fx,segs:pre.segs,mm},pm,pre.segs.length)};upd(rec.id,{md:fin.md});
       toast('개요·주제별 정리를 다시 만들었습니다');
@@ -38948,7 +39002,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       if(pre)toast('끊긴 정리를 이어서 합니다 — '+pre.segs.length+'조각은 건너뜁니다');
       /* v10.67: 기록의 언어를 그대로 따른다(중국어 등이면 번역·원문 대조). 자동 감지일 때만 받아쓴 글 전체로 판정 — 앞 2,500자만 보고 한국어로 오판하던 문제 */
       const korean=pre?pre.korean:(lng==='ko'?true:(lng&&lng!=='auto'?false:tbIsKorean(src)));
-      const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean,resume:pre?pre.segs:null,
+      const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean,resume:pre?pre.segs:null,mtype:rec.mtype||Store.cfg.tbMinutesType,mextra:rec.mreq,
         onStep:m=>setBusy(m+' ('+pm+')'),onProgress:p=>{upd(rec.id,{md:putPolish(md0,p,pm,segs.length)});}});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
       const fin={...rec,md:putPolish(md0,out,pm,segs.length)};upd(rec.id,{md:fin.md});
@@ -38967,6 +39021,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     const mb=fs.reduce((n,x)=>n+x.size,0)/1048576;
     const head=fs.length>1?'🎙 파일 '+fs.length+'개 · '+mb.toFixed(1)+'MB':'🎙 '+f.name+' · '+mb.toFixed(1)+'MB';
     const rec={...newNote(t,'work','# '+t+'\n\n> '+head+' · '+lname+' · '+new Date().toLocaleString('ko-KR')+'\n'+(fs.length>1?'\n> 순서: '+fs.map((x,i)=>(i+1)+'. '+x.name).join(' · ')+'\n':''),['전사']),lang:lng};
+    rec.mtype=Store.cfg.tbMinutesType||'seq';   /* v10.68: 정리 유형 */
     local.current[rec.id]=fs.length>1?fs:f;
     if(LIVE.cal&&LIVE.cal.ev){rec.cal={ev:LIVE.cal.ev,date:LIVE.cal.date,title:LIVE.cal.title};tbPost({state:'live'});}   /* 일정앱에서 연결해 온 탭 — 전사·정리가 끝나면 그 일정에 넣는다(v10.63) */
     let big=0;
@@ -39029,6 +39084,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
           {TB_LANGS.map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
         <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>hasRaw?setTidyOpen(true):runTidy(cur)}
           title={'받아쓰기 '+tbSttName(Store.cfg.tbSttModel)+' · 정리 '+modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id)+' — '+(tbSection(cur.md,'녹취')?'받아쓴 글로 회의록(개요·주제별 정리)·한국어 번역·정리된 원문을 다시 만듭니다':'녹음을 처음부터 받아쓰고 이어서 한국어 번역과 회의록(개요·주제별 정리)을 만듭니다. 결과는 맨 위에 붙습니다')}>✨ 정리하기</Button>
+        <Button variant="secondary" size="sm" disabled={!!busy||!hasRaw} onClick={()=>{setAskTxt(cur.mreq||'');setAskOpen(true);}} title="표준 정리로 안 되는 부분을 AI에게 직접 요청합니다 — 개요·주제별 정리를 요청대로 다시 쓰거나, 녹취에 대해 물어봅니다">💬 AI에게 요청</Button>
         <Button variant="secondary" size="sm" disabled={!!busy} onClick={exportDocx} title="이 기록을 Word 문서로 내려받습니다">📄 Word</Button>
         <Button variant="secondary" size="sm" disabled={!!busy||Store.mode!=='supabase'} onClick={()=>cur.cal?tbCalExport(cur,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message)):setToCal(true)}
           title={cur.cal?'연결된 일정 『'+(cur.cal.title||'')+'』('+(cur.cal.date||'')+')의 메모에 바로 넣습니다':'정리된 내용을 일정관리 앱의 그날 일정 본문(메모)에 넣습니다'}>📅 {cur.cal?'일정에 넣기':'일정으로'}</Button>
@@ -39051,6 +39107,15 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   const pickLang=l=>{setLangOpen(false);upLang.current=l;setLang(l);Store.saveCfg({sttLang:l});document.getElementById('tbAudioIn').click();};
   const upBtn=<><Button icon="🎙" disabled={!!busy} onClick={()=>setLangOpen(true)} title="녹음 언어를 고른 뒤 파일을 올리면 받아쓰기 → 정리까지 이어서 합니다. 여러 파일을 함께 고르면 파일명 순서로 이어 붙여 하나의 기록으로 정리합니다">음성 파일 전사</Button>
       <input id="tbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp,.ogg" style={{display:'none'}} multiple onChange={e=>{const fs=[...(e.target.files||[])];e.target.value='';onFile(fs,upLang.current);}}/>
+      {askOpen&&cur&&<Modal open onClose={()=>setAskOpen(false)} title="💬 AI에게 요청" width={520}>
+        <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',lineHeight:1.6}}>예: 「Q&A 형식으로 질문마다 답변자를 밝혀 정리」, 「5번 주제를 더 자세히」, 「결정 사항만 따로 모아 맨 위에」, 「2026년 납품 일정 관련 발언만 뽑아 줘」</div>
+        <textarea value={askTxt} onChange={e=>setAskTxt(e.target.value)} rows={4} placeholder="요청을 적으세요" style={{...inputStyle,width:'100%',marginTop:8,fontSize:'var(--fs-md)',lineHeight:1.5}}/>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:10}}>
+          <Button disabled={!askTxt.trim()} onClick={()=>{setAskOpen(false);upd(cur.id,{mreq:askTxt.trim()});runMinutes({...cur,mreq:askTxt.trim()});}} title="조각별 정리는 그대로 두고, 이 요청을 규칙보다 우선해서 개요·주제별 정리를 다시 씁니다. 요청은 기록에 남아 다음 정리에도 적용됩니다">📋 요청대로 개요·주제별 다시 쓰기</Button>
+          <Button variant="secondary" disabled={!askTxt.trim()} onClick={()=>{setAskOpen(false);runAsk(cur,askTxt.trim());}} title="정리를 바꾸지 않고, 녹취 내용을 바탕으로 답만 받아 기록 끝에 「AI 메모」로 붙입니다">❓ 물어보기만</Button>
+          {cur.mreq&&<Button variant="ghost" onClick={()=>{setAskOpen(false);upd(cur.id,{mreq:''});toast('저장된 AI 요청을 지웠습니다 — 다음 정리부터 표준 규칙만 씁니다');}}>저장된 요청 지우기</Button>}
+        </div>
+      </Modal>}
       {tidyOpen&&cur&&(()=>{   /* v10.65: 끊긴 기록을 처음부터 다시 돌리지 않도록, 어디부터 할지 고른다 */
         const raw=tbSection(cur.md,'녹취')||tbSection(cur.md,'실시간 원문');const rawN=raw?parseSegs(raw.replace(/^>.*$/gm,'').trim()).length:0;
         const pre=parsePolished(cur.md,true);const polN=pre?pre.segs.length:0;const done=!!(pre&&pre.done);const sttOn=/⏳ 받아쓰는 중/.test(cur.md);
@@ -39059,6 +39124,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         const sub={display:'block',fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:2};
         return <Modal open onClose={()=>setTidyOpen(false)} title="✨ 정리하기 — 어디부터 할까요" width={440}>
           <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',lineHeight:1.6}}>받아쓴 조각 {rawN}개 · 정리된 조각 {polN}개{done?' · 개요·주제별 정리 있음':''}{sttOn?' · 받아쓰기가 도중에 끊긴 기록':''}</div>
+          <TypePick rec={cur}/>{cur.mreq&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',marginTop:4}}>AI 요청: {cur.mreq}</div>}
           <button type="button" style={row} onClick={()=>go(()=>runPolish(cur))}><b>{polN&&!done?'▶ 이어서 정리':'▶ 조각별 정리부터 다시'}</b><span style={sub}>{polN&&!done?'끝낸 '+polN+'개 조각은 건너뛰고 나머지 조각을 정리한 뒤 개요·주제별 정리를 만듭니다':'받아쓴 글로 조각별 정리·번역을 처음부터 다시 하고 개요·주제별 정리까지 만듭니다'}</span></button>
           <button type="button" style={{...row,opacity:polN?1:.5}} disabled={!polN} onClick={()=>go(()=>runMinutes(cur))}><b>📋 개요·주제별 정리만 다시</b><span style={sub}>정리된 조각 {polN}개는 그대로 두고 개요와 주제별 정리만 다시 만듭니다 (빠름)</span></button>
           <button type="button" style={{...row,opacity:hasAudio?1:.5}} disabled={!hasAudio} onClick={()=>go(()=>runStt(cur))}><b>🎙 처음부터 다시 받아쓰기</b><span style={sub}>{hasAudio?'녹음을 처음부터 다시 받아쓰고 정리합니다 (가장 오래 걸림)'+(sttOn?' — 받아쓰기가 끊긴 기록은 뒷부분이 비어 있으니 이 방법으로만 채워집니다':''):'이 기록에는 녹음 파일이 없습니다'}</span></button>
@@ -39066,6 +39132,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       <Modal open={langOpen} onClose={()=>setLangOpen(false)} title="🎙 녹음에서 말하는 언어" width={380}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
           {TB_LANGS.map(l=><Button key={l.id} variant={l.id===lang?'primary':'gray'} onClick={()=>pickLang(l.id)}>{l.id===lang?'✓ ':''}{l.label}</Button>)}</div>
+        <TypePick/>
         <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:10,lineHeight:1.6}}>고르면 바로 파일 선택 창이 열립니다(여러 파일을 함께 고르면 파일명 순서로 이어 붙여 하나로 정리). 결과는 개요 → 주제별 헤드라인 → 개조식 정리 순으로 회의록 모양이 되고, 한국어 녹음은 번역 없이 만듭니다.</div>
       </Modal></>;
   return <Card title="📝 번역/정리" badge={<Badge tone="muted">{recs.length}개</Badge>}
