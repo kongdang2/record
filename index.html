@@ -38162,9 +38162,9 @@ async function polishStream(src,opt={}){
   const res={korean,fx,segs,mm};res.md=segsMd(res);return res;
 }
 /* 정리 도중 끊긴 기록에서 이미 끝낸 조각 읽기 — 진행 줄(⏳)이 남아 있고 조각마다 시각 머리(####)가 있을 때만 */
-function parsePolished(md){
+function parsePolished(md,any){   /* any: 끝난 기록의 조각도 읽는다(개요·주제별만 다시 만들 때, v10.65) */
   const sec=tbSection(md,'정리·번역')||tbSection(md,'정리');
-  if(!sec||!/⏳/.test(sec))return null;
+  if(!sec||(!any&&!/⏳/.test(sec)))return null;
   const kor=/###\s*정리본 \(조각별\)/.test(sec);
   const i=sec.search(/###\s*(?:번역 · 원문|정리본) \(조각별\)/);if(i<0)return null;
   const blocks=sec.slice(i).split(/\n(?=#### )/).slice(1);
@@ -38178,7 +38178,9 @@ function parsePolished(md){
     if(!ko||/^\(이 부분 번역 실패/.test(ko))break;
     segs.push({label:m[1],orig,ko});
   }
-  return segs.length?{korean:kor,segs}:null;
+  const fx={topic:((/^>\s*분야:\s*(.*?)\s*$/m.exec(sec)||[])[1]||'').trim(),
+    fixes:(((/^>\s*바로잡은 낱말:\s*(.*?)\s*$/m.exec(sec)||[])[1]||'').split(' · ').map(x=>x.split('→')).filter(x=>x.length===2).map(([wrong,right])=>({wrong:wrong.trim(),right:right.trim()})))};
+  return segs.length?{korean:kor,segs,fx,done:/###\s*개요/.test(sec)}:null;
 }
 /* 정리 절 본문: (회의록 머리) + 조각별 「시각 · 번역 / 원문(인용)」 */
 function segsMd({korean,fx,segs,mm,progress}){
@@ -38234,7 +38236,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.64';
+const TB_VERSION='v10.65';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38810,6 +38812,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   React.useEffect(()=>{busyAt.current=Date.now();if(!busy)return;const t=setInterval(tick,1000);return()=>clearInterval(t);},[busy]);
   const elapsed=()=>{const s=Math.floor((Date.now()-busyAt.current)/1000);return s<60?s+'초':Math.floor(s/60)+'분 '+String(s%60).padStart(2,'0')+'초';};
   const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
+  const [tidyOpen,setTidyOpen]=React.useState(false);   /* ✨ 정리하기 선택창(v10.65) */
   const [q,setQ]=React.useState('');const [confirmDel,setConfirmDel]=React.useState(false);const [toCal,setToCal]=React.useState(false);
   /* 체크박스로 여러 개 골라 지우기 */
   const [pick,setPick]=React.useState(()=>new Set());const [askMany,setAskMany]=React.useState(false);const [delBusy,setDelBusy]=React.useState(false);
@@ -38890,6 +38893,24 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       toast('⚠ 전사 실패 — '+e.message);
       render();upd(rec.id,{md:rec.md+'\n\n> ⚠ 전사 실패 — '+e.message+'\n'});
     }
+    setBusy('');
+  };
+  /* v10.65: 조각별 정리는 그대로 두고 개요·주제별 정리만 다시 만든다 — 조각은 다시 부르지 않으니 빠르고 싸다 */
+  const runMinutes=async(rec)=>{
+    if(TB_JOBS.has(rec.id)){toast('이 기록은 이미 정리 중입니다 — 끝날 때까지 기다려 주세요');return;}
+    const pre=parsePolished(rec.md,true);
+    if(!pre||!pre.segs.length){toast('조각별 정리가 아직 없습니다 — 먼저 「이어서 정리」를 하세요');return;}
+    TB_JOBS.add(rec.id);try{KeepAwake.hold('job:'+rec.id);}catch(_){}
+    const pm=modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id);
+    setBusy('개요·주제별 정리 준비 중… ('+pm+')');
+    try{
+      const mm=await meetingMinutes(pre.segs.map(x=>x.ko).join('\n\n'),{topic:pre.fx.topic,onStep:m=>setBusy(m+' ('+pm+')')});
+      TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
+      const fin={...rec,md:putPolish(rec.md,{korean:pre.korean,fx:pre.fx,segs:pre.segs,mm},pm,pre.segs.length)};upd(rec.id,{md:fin.md});
+      toast('개요·주제별 정리를 다시 만들었습니다');
+      if(rec.cal)await tbCalExport(fin,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));
+    }catch(e){toast('⚠ 개요·주제별 정리 실패 — '+e.message);}
+    finally{TB_JOBS.delete(rec.id);try{KeepAwake.release('job:'+rec.id);}catch(_){}}
     setBusy('');
   };
   const runPolish=async(rec)=>{
@@ -38988,7 +39009,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
           style={{...inputStyle,border:'none',borderBottom:'1px dashed var(--border-strong)',borderRadius:0,fontWeight:700,fontSize:16,flex:'1 1 220px',minWidth:0,padding:'4px 2px'}}/>
         <select style={sel_} value={cur.lang||lang} onChange={e=>{setLang(e.target.value);Store.saveCfg({sttLang:e.target.value});upd(cur.id,{lang:e.target.value});}} title="녹음에서 말하는 언어" aria-label="말하는 언어">
           {TB_LANGS.map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
-        <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>runTidy(cur)}
+        <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>hasRaw?setTidyOpen(true):runTidy(cur)}
           title={'받아쓰기 '+tbSttName(Store.cfg.tbSttModel)+' · 정리 '+modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id)+' — '+(tbSection(cur.md,'녹취')?'받아쓴 글로 회의록(개요·주제별 정리)·한국어 번역·정리된 원문을 다시 만듭니다':'녹음을 처음부터 받아쓰고 이어서 한국어 번역과 회의록(개요·주제별 정리)을 만듭니다. 결과는 맨 위에 붙습니다')}>✨ 정리하기</Button>
         <Button variant="secondary" size="sm" disabled={!!busy} onClick={exportDocx} title="이 기록을 Word 문서로 내려받습니다">📄 Word</Button>
         <Button variant="secondary" size="sm" disabled={!!busy||Store.mode!=='supabase'} onClick={()=>cur.cal?tbCalExport(cur,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message)):setToCal(true)}
@@ -39012,6 +39033,18 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   const pickLang=l=>{setLangOpen(false);upLang.current=l;setLang(l);Store.saveCfg({sttLang:l});document.getElementById('tbAudioIn').click();};
   const upBtn=<><Button icon="🎙" disabled={!!busy} onClick={()=>setLangOpen(true)} title="녹음 언어를 고른 뒤 파일을 올리면 받아쓰기 → 정리까지 이어서 합니다. 여러 파일을 함께 고르면 파일명 순서로 이어 붙여 하나의 기록으로 정리합니다">음성 파일 전사</Button>
       <input id="tbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp,.ogg" style={{display:'none'}} multiple onChange={e=>{const fs=[...(e.target.files||[])];e.target.value='';onFile(fs,upLang.current);}}/>
+      {tidyOpen&&cur&&(()=>{   /* v10.65: 끊긴 기록을 처음부터 다시 돌리지 않도록, 어디부터 할지 고른다 */
+        const raw=tbSection(cur.md,'녹취')||tbSection(cur.md,'실시간 원문');const rawN=raw?parseSegs(raw.replace(/^>.*$/gm,'').trim()).length:0;
+        const pre=parsePolished(cur.md,true);const polN=pre?pre.segs.length:0;const done=!!(pre&&pre.done);const sttOn=/⏳ 받아쓰는 중/.test(cur.md);
+        const go=fn=>{setTidyOpen(false);fn();};
+        const row={display:'block',width:'100%',textAlign:'left',padding:'10px 12px',marginTop:8,border:'1px solid var(--border-default)',borderRadius:6,background:'#fff',cursor:'pointer',lineHeight:1.5};
+        const sub={display:'block',fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:2};
+        return <Modal open onClose={()=>setTidyOpen(false)} title="✨ 정리하기 — 어디부터 할까요" width={440}>
+          <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',lineHeight:1.6}}>받아쓴 조각 {rawN}개 · 정리된 조각 {polN}개{done?' · 개요·주제별 정리 있음':''}{sttOn?' · 받아쓰기가 도중에 끊긴 기록':''}</div>
+          <button type="button" style={row} onClick={()=>go(()=>runPolish(cur))}><b>{polN&&!done?'▶ 이어서 정리':'▶ 조각별 정리부터 다시'}</b><span style={sub}>{polN&&!done?'끝낸 '+polN+'개 조각은 건너뛰고 나머지 조각을 정리한 뒤 개요·주제별 정리를 만듭니다':'받아쓴 글로 조각별 정리·번역을 처음부터 다시 하고 개요·주제별 정리까지 만듭니다'}</span></button>
+          <button type="button" style={{...row,opacity:polN?1:.5}} disabled={!polN} onClick={()=>go(()=>runMinutes(cur))}><b>📋 개요·주제별 정리만 다시</b><span style={sub}>정리된 조각 {polN}개는 그대로 두고 개요와 주제별 정리만 다시 만듭니다 (빠름)</span></button>
+          <button type="button" style={{...row,opacity:hasAudio?1:.5}} disabled={!hasAudio} onClick={()=>go(()=>runStt(cur))}><b>🎙 처음부터 다시 받아쓰기</b><span style={sub}>{hasAudio?'녹음을 처음부터 다시 받아쓰고 정리합니다 (가장 오래 걸림)'+(sttOn?' — 받아쓰기가 끊긴 기록은 뒷부분이 비어 있으니 이 방법으로만 채워집니다':''):'이 기록에는 녹음 파일이 없습니다'}</span></button>
+        </Modal>;})()}
       <Modal open={langOpen} onClose={()=>setLangOpen(false)} title="🎙 녹음에서 말하는 언어" width={380}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
           {TB_LANGS.map(l=><Button key={l.id} variant={l.id===lang?'primary':'gray'} onClick={()=>pickLang(l.id)}>{l.id===lang?'✓ ':''}{l.label}</Button>)}</div>
