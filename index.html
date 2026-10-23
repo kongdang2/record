@@ -38492,7 +38492,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.76';
+const TB_VERSION='v10.77';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38653,12 +38653,14 @@ const fmtKrw=v=>'≈₩'+Math.round(v*TB_USD_KRW).toLocaleString('ko-KR');
 /* 사용 기록 → 항목별 합계 */
 const TB_GROUPS=[
   {id:'live_asr',label:'통역 · 정확도 — 받아쓰기',unit:'sec'},
-  {id:'live_tr',label:'통역 · 정확도 — 번역(Claude)',unit:'req'},
+  {id:'live_tr',label:'통역 — 번역·교정·요점 정리(AI)',unit:'req'},
   {id:'live',label:'통역 · 속도',unit:'sec'},
   {id:'stt',label:'녹음 전사',unit:'sec'},
   {id:'polish',label:'정리·번역(Claude)',unit:'calls'},
 ];
-const TB_KIND_GROUP={'통역(정확도)':'live_asr','Claude(통역 번역)':'live_tr','통역(속도)':'live','전사':'stt','정리·번역':'polish','Claude(정리·번역)':'polish'};
+const TB_KIND_GROUP={'통역(정확도)':'live_asr','Claude(통역 번역)':'live_tr',
+  /* v10.77: v10.37~v10.61에 생긴 통역 AI 호출(문단·요점·묶기·교정)과 AI 요청이 어느 묶음에도 안 들어가 요금에서 빠지고 있었다 */
+  'Claude(통역 교정)':'live_tr','Claude(통역 요점)':'live_tr','Claude(통역 묶기)':'live_tr','Claude(통역 문단)':'live_tr','Claude(AI 요청)':'polish','통역(속도)':'live','전사':'stt','정리·번역':'polish','Claude(정리·번역)':'polish'};
 function tbAgg(rows,from,to){
   const o={};TB_GROUPS.forEach(g=>{o[g.id]={sec:0,calls:0,req:0,cost:0,unknown:false};});o.total=0;
   (rows||[]).filter(r=>r.created_at>=from&&(!to||r.created_at<to)).forEach(r=>{
@@ -38747,6 +38749,18 @@ const TB={
   async log(kind,seconds,calls,model){
     try{await Store.sb.from('tb_usage').insert({user_id:Store.user.id,email:Store.user.email,kind,seconds:Math.round(seconds||0),calls:calls||0,model:model||null});}
     catch(e){console.warn('[통번역] 사용 기록 실패',e);}
+  },
+  /* v10.77: 사용량 합계를 DB에서 바로 — 기록 줄을 하나하나 받으면 Supabase가 한 번에 1,000줄까지만 돌려줘 최근 것이 빠졌다.
+     SQL 함수 tb_usage_sum(TB_SUM_SQL)이 있으면 사람·항목·모델·달별 합계를 받고, 없으면 null(예전 방식) */
+  sumOK:null,
+  async usageSum(){
+    try{const {data,error}=await Store.sb.rpc('tb_usage_sum',{p_from:monthStart(-1)});
+      if(error){TB.sumOK=false;console.warn('[통번역] 사용량 합계 함수 없음',error);return null;}
+      TB.sumOK=true;
+      return (data||[]).map(r=>{const [y,m]=String(r.month||'').split('-').map(Number);
+        return {email:r.email,kind:r.kind,model:r.model,seconds:+r.seconds||0,calls:+r.calls||0,tok_in:+r.tok_in||0,tok_out:+r.tok_out||0,
+          created_at:y?new Date(y,m-1,1).toISOString():new Date().toISOString()};});}
+    catch(e){TB.sumOK=false;return null;}
   },
   async myUsage(){
     const {data,error}=await Store.sb.from('tb_usage').select('*').eq('user_id',Store.user.id).gte('created_at',monthStart(-1));
@@ -39623,7 +39637,7 @@ function TbTeam({toast}){
   const [pw,setPw]=React.useState(TB_DEF_PW);const [pwFor,setPwFor]=React.useState('');const [pw2,setPw2]=React.useState('');const [made,setMade]=React.useState('');
   const redirectTo=location.origin+location.pathname;
   const pwBad=p=>p&&p.length<8;
-  const load=async()=>{setErr('');try{setData(await TB.admin('list'));}catch(e){setErr(e.message);}};
+  const load=async()=>{setErr('');try{const d=await TB.admin('list');const sum=await TB.usageSum();if(d&&sum)d.rows=sum;setData(d);}catch(e){setErr(e.message);}};
   React.useEffect(()=>{load();},[]);
   const add=async()=>{const e=email.trim().toLowerCase();if(!/.+@.+\..+/.test(e)){toast('이메일 주소를 확인하세요');return;}
     if(pwBad(pw)){toast('초기 비밀번호는 8자 이상으로 정하세요');return;}
@@ -39720,6 +39734,22 @@ function TbSetup({onRetry}){
    SQL 함수 tb_usage()(관리자만 실행, 아래 TB_USAGE_SQL)가 저장소 파일 합계와 DB 크기를 돌려준다.
    함수가 아직 없으면 「용량 설정 필요」를 보이고, 누르면 SQL 편집기에 붙여 넣을 문장을 보여 준다 */
 const TB_FREE={files:1024**3,db:500*1024**2};   /* Supabase 무료 플랜 한도: 저장소 1GB, DB 500MB */
+/* v10.77: 사용량 합계 — 관리자는 팀 전체, 팀원은 본인 것만. 달은 한국 시각 기준 */
+const TB_SUM_SQL=`create or replace function public.tb_usage_sum(p_from timestamptz)
+returns table(email text, kind text, model text, month text, seconds bigint, calls bigint, tok_in bigint, tok_out bigint)
+language sql stable security definer set search_path = public as $$
+  select lower(u.email), u.kind, u.model,
+         to_char(u.created_at at time zone 'Asia/Seoul', 'YYYY-MM'),
+         sum(coalesce(u.seconds,0))::bigint, sum(coalesce(u.calls,0))::bigint,
+         sum(coalesce(u.tok_in,0))::bigint, sum(coalesce(u.tok_out,0))::bigint
+  from public.tb_usage u
+  where u.created_at >= p_from
+    and (u.user_id = auth.uid() or exists (select 1 from public.tb_members m
+         where lower(m.email) = lower(auth.jwt() ->> 'email') and m.role = 'owner'))
+  group by 1, 2, 3, 4;
+$$;
+revoke all on function public.tb_usage_sum(timestamptz) from public, anon;
+grant execute on function public.tb_usage_sum(timestamptz) to authenticated;`;
 const TB_USAGE_SQL=`create or replace function public.tb_usage() returns json
 language plpgsql security definer set search_path = public, storage as $$
 begin
@@ -39783,7 +39813,8 @@ function TbUsageChip({role,onOpenSettings}){
   const team=role==='owner';
   const load=React.useCallback(async()=>{
     try{await TB.flushClaude();}catch(_){}
-    try{if(team){const d=await TB.admin('list');setRows(d&&d.rows?d.rows:null);}else setRows(await TB.myUsage());}
+    try{const sum=await TB.usageSum();
+      if(sum)setRows(sum);else if(team){const d=await TB.admin('list');setRows(d&&d.rows?d.rows:null);}else setRows(await TB.myUsage());}
     catch(e){console.warn('[통번역] 사용량 읽기 실패',e);setRows(r=>r===undefined?null:r);}
   },[team]);
   React.useEffect(()=>{load();const t=setInterval(load,5*60*1000);
@@ -39817,6 +39848,10 @@ function TbUsageChip({role,onOpenSettings}){
           <td style={{...tdS,textAlign:'right'}}>{fmtMin(p.o.live_asr.sec+p.o.live.sec+p.o.stt.sec)}</td>
           <td style={{...tdS,textAlign:'right'}}>{fmtUsd(p.o.total)} <span style={{color:'var(--text-label)'}}>{fmtKrw(p.o.total)}</span></td></tr>)}</tbody></table></div>}
       <TbCostNote/>
+      {team&&TB.sumOK===false&&<div style={{marginTop:10,padding:'8px 10px',background:'#FFF6D6',borderRadius:4,fontSize:'var(--fs-sm2)',lineHeight:1.6}}>
+        ⚠ 사용 기록이 많아지면 최근 것이 집계에서 빠집니다(한 번에 1,000줄 한도). Supabase › SQL Editor에서 아래 SQL을 한 번 실행하면 합계를 DB에서 바로 받아 빠짐없이 셉니다.
+        <div style={{marginTop:6}}><Button size="xs" variant="gray" onClick={()=>{try{navigator.clipboard.writeText(TB_SUM_SQL);}catch(_){}}}>SQL 복사</Button></div>
+        <pre style={{background:'#fff',padding:8,borderRadius:4,fontSize:11,overflowX:'auto',whiteSpace:'pre',marginTop:6}}>{TB_SUM_SQL}</pre></div>}
       <div style={{display:'flex',justifyContent:'flex-end',gap:6,marginTop:10}}>
         <Button variant="ghost" size="sm" onClick={load}>새로고침</Button>
         {team&&onOpenSettings&&<Button variant="gray" size="sm" onClick={()=>{setOpen(false);onOpenSettings();}}>권한관리에서 지난달 보기</Button>}
@@ -39854,7 +39889,7 @@ function TbShell({user,role,onLogout}){
     DevRec.sweep().catch(()=>{});   /* 14일 지난 브라우저 보관 녹음 지우기 */
   },[]);
   /* Claude 토큰 기록(요금 계산용) */
-  React.useEffect(()=>{window.__claudeUsage=TB.addClaude;const t=setInterval(TB.flushClaude,60000);
+  React.useEffect(()=>{window.__claudeUsage=TB.addClaude;const t=setInterval(TB.flushClaude,5*60000);   /* v10.77: 1분→5분(기록 줄 수 줄이기) */
     const bye=()=>{TB.flushClaude();};window.addEventListener('pagehide',bye);
     return()=>{clearInterval(t);window.removeEventListener('pagehide',bye);TB.flushClaude();window.__claudeUsage=null;};},[]);
   const setAll=next=>{recsRef.current=next;setRecs(next);};
