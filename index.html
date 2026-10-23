@@ -38004,8 +38004,10 @@ async function transcriptFixes(raw,hint){
   return {topic:j.topic||'',fixes:Array.isArray(j.fixes)?j.fixes.filter(f=>f&&f.wrong&&f.right).slice(0,15):[]};
 }
 /* 한글 비율로 한국어 녹취인지 가린다 — 한국어면 번역 없이 회의록용 정리본만 만든다 */
+/* v10.67: 한자·가나가 조금이라도 섞여 있으면(3% 넘으면) 한국어 전용으로 보지 않는다 — 한·중 섞인 회의가 「정리본」으로만 나와 번역·원문 대조가 사라졌다. 영문 낱말은 한국어 회의에도 흔해 허용 */
 const tbIsKorean=t=>{const s=String(t||'');const ko=(s.match(/[가-힣]/g)||[]).length;
-  const other=(s.match(/[\u4e00-\u9fff\u3040-\u30ffA-Za-z]/g)||[]).length;return ko>=20&&ko>=(ko+other)*0.6;};
+  const cjk=(s.match(/[\u4e00-\u9fff\u3040-\u30ff]/g)||[]).length;const other=cjk+(s.match(/[A-Za-z]/g)||[]).length;
+  return ko>=20&&ko>=(ko+other)*0.6&&cjk<=(ko+cjk)*0.03;};
 /* ── 회의록 모양으로 가공 ──────────────────────────────────────
    번역(또는 한국어 정리본)은 아직 「말한 순서대로의 글」이다. 회의록은 주제별로 다시 묶어야 한다:
    개요(3~5줄) → 주제별 헤드라인 → 개조식 항목(같은 말 반복은 하나로).
@@ -38250,7 +38252,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.66';
+const TB_VERSION='v10.67';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38944,7 +38946,9 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       const segs=parseSegs(src);const lng=rec.lang;let md0=rec.md;
       const pre=parsePolished(rec.md);   /* 정리 도중 끊긴 기록이면 끝낸 조각 뒤부터 이어서 */
       if(pre)toast('끊긴 정리를 이어서 합니다 — '+pre.segs.length+'조각은 건너뜁니다');
-      const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean:pre?pre.korean:(lng==='ko'?true:undefined),resume:pre?pre.segs:null,
+      /* v10.67: 기록의 언어를 그대로 따른다(중국어 등이면 번역·원문 대조). 자동 감지일 때만 받아쓴 글 전체로 판정 — 앞 2,500자만 보고 한국어로 오판하던 문제 */
+      const korean=pre?pre.korean:(lng==='ko'?true:(lng&&lng!=='auto'?false:tbIsKorean(src)));
+      const out=await polishStream(segs,{hint:Store.cfg.sttHint,korean,resume:pre?pre.segs:null,
         onStep:m=>setBusy(m+' ('+pm+')'),onProgress:p=>{upd(rec.id,{md:putPolish(md0,p,pm,segs.length)});}});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
       const fin={...rec,md:putPolish(md0,out,pm,segs.length)};upd(rec.id,{md:fin.md});
