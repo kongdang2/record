@@ -38018,8 +38018,8 @@ const MINUTES_BLOCK=12000;   /* 한 번에 넘기는 글자 수 */
 const MINUTES_RULES='규칙: 개조식(명사형으로 끝맺음, 「~했습니다」 같은 서술형 금지).'
   +' 다만 낱말만 늘어놓거나 지나치게 줄이지 말고, 항목 하나만 읽어도 누가(어느 쪽이) 무엇을 소개·설명·제안·질문·답변했는지 알 수 있게 주어와 대상을 살려 완결된 한 줄로 쓴다.'
   +' 한 항목에는 한 가지 내용만 담고, 세부 내용·근거·예시는 그 아래 들여쓴 하위 항목(「  - 」)으로 단다.'
-  +' 질문과 답변은 「(질의) … → (답변) …」처럼 한 항목에 묶는다. 같은 내용이 여러 번 나오면 하나로 합친다.'
-  +' 숫자·기한·고유명사는 그대로 살리되, 받아쓰기가 불분명해 확실하지 않은 수치는 빼거나 (?)를 붙인다.'
+  +' 질문과 답변은 「Q: …」 「A: …」로 분명히 나눠 적는다. 같은 내용이 여러 번 나오면 하나로 합친다.'
+  +' 숫자·기한·고유명사는 그대로 살린다. 받아쓰기가 불분명해 확실하지 않은 수치·이름은 아예 쓰지 않고 그 항목은 수치 없이 적는다. 「(?)」, 「(문장 끊김)」, 「(불명확)」 같은 표시는 절대 쓰지 않는다.'
   +' 정해진 것은 「→ 결정: 」, 해야 할 일은 「→ 할 일: 」로 항목 끝에 적는다.'
   +' 녹취에 없는 내용은 지어내지 않는다. 인사·잡담·같은 말 되묻기는 뺀다.';
 const MINUTES_FORM='\n\n다른 말 없이 아래 형식으로만 출력한다.\n===개요===\n(개요)\n===정리===\n(주제별 정리)';
@@ -38028,7 +38028,7 @@ const MINUTES_FORM='\n\n다른 말 없이 아래 형식으로만 출력한다.\n
 const MINUTES_TYPES=[{id:'seq',label:'녹취 순서대로',desc:'말한 순서 그대로, 주제가 바뀌는 곳마다 소제목'},{id:'qa',label:'질의응답(Q&A)',desc:'질문이 나온 순서대로 Q1·Q2… 질문 단위로 묶음'},{id:'topic',label:'주제별 재배치',desc:'전체를 주제별로 다시 모음(순서 바뀜)'}];
 const MINUTES_END='===끝===';
 const minutesShape=type=>type==='qa'
-  ?'질문 단위로 묶는다: 질문이 나온 순서대로 「#### Q번호. 질문 요지」 한 줄, 그 아래 답변 내용을 「- 」 항목으로(질문자·답변자가 드러나게), 필요하면 끝에 「- 정리: 」 한 줄. 질문이 아닌 소개·설명·논의는 그 자리에 「#### 번호. 헤드라인」으로 둔다. 순서를 바꾸지 않는다.'
+  ?'질문 단위로 묶는다: 질문이 나온 순서대로 「#### Q번호. 질문 요지」 한 줄, 그 아래 첫 항목은 「- **Q** (질문자): 질문 내용」, 이어서 「- **A** (답변자): 답변 핵심」과 그 세부를 들여쓴 하위 항목(「  - 」)으로. 추가 질문이 이어지면 다시 「- **Q**」 「- **A**」. 질문자·답변자를 모르면 괄호는 뺀다. 질문이 아닌 소개·설명·논의는 그 자리에 「#### 번호. 헤드라인」으로 둔다. 순서를 바꾸지 않는다.'
   :type==='topic'
   ?'주제마다 「#### 번호. 헤드라인」 한 줄, 그 아래 개조식 항목 「- 」. 전체를 주제별로 다시 모으고, 주제 안에서는 말한 흐름(소개·설명 → 논의 → 질의응답 → 결정)대로 적는다.'
   :'녹취 순서대로 적는다: 말한 순서를 바꾸지 않고, 주제가 바뀌는 곳마다 「#### 번호. 헤드라인」 한 줄을 두고 그 아래 개조식 항목 「- 」. 같은 주제가 뒤에 다시 나와도 앞으로 옮기지 않고 그 자리에 둔다. 질문과 답변이 오가면 「(질의) … → (답변) …」로 한 항목에 묶는다.';
@@ -38037,7 +38037,7 @@ const minutesCount=type=>type==='qa'?'질문 수만큼':type==='topic'?'3~10개'
 async function askLong(q,o,log){
   const endRe=/===\s*끝\s*===\s*$/;
   let t=String(await askClaude(q,o)||'').trim();
-  for(let n=0;n<2&&!endRe.test(t);n++){
+  for(let n=0;n<4&&!endRe.test(t);n++){
     log&&log('답이 길어 이어 받는 중…'+(n?' ('+(n+1)+')':''));
     const cut=t.lastIndexOf('\n');const kept=cut>0?t.slice(0,cut):t;   /* 마지막 줄은 잘렸을 수 있으니 버리고 그 앞까지 */
     const more=String(await askClaude(q+'\n\n--- 지금까지 쓴 답(길이 한도에 걸려 중간에 잘림, 끝부분) ---\n'+kept.slice(-2500)
@@ -38045,6 +38045,24 @@ async function askLong(q,o,log){
     t=kept+'\n'+more.replace(/^===\s*(개요|정리)\s*===\s*\n?/gm,'');
   }
   return t.replace(/===\s*끝\s*===/g,'').trim();
+}
+/* v10.69: 남은 (?)·끊김 메모 걷어내기 */
+const minutesClean=t=>String(t||'').replace(/\s*[(（]\s*(\?|？|문장\s*끊김|끊김|불명확|불분명|확인\s*필요)\s*[)）]/g,'').replace(/[ \t]+$/gm,'');
+/* v10.69: 녹취 순서·Q&A는 부분별 초안을 순서대로 이어 붙이고 번호만 다시 매긴다(긴 합치기 답이 한도에 잘리던 문제의 근본 해결).
+   초안 경계에서 같은 소제목이 이어지면 하나로 합친다 */
+function minutesStitch(drafts,type){
+  const out=[];let n=0,q=0,last='';
+  for(const d of drafts){
+    for(const ln of String(d||'').split('\n')){
+      const m=/^####\s*(Q)?\s*\d*\s*[.)]?\s*(.*)$/.exec(ln);
+      if(m){const isQ=!!m[1]||(type==='qa'&&/^Q\b/.test(ln.replace(/^####\s*/,'')));const title=m[2].replace(/^Q\s*\d*\s*[.)]?\s*/,'').trim();
+        const key=(isQ?'Q':'')+title.replace(/\s+/g,'');
+        if(key&&key===last)continue;   /* 경계에서 같은 소제목 */
+        last=key;out.push('#### '+(isQ?'Q'+(++q):(++n))+'. '+title);continue;}
+      if(ln.trim()||out.length)out.push(ln);
+    }
+  }
+  return out.join('\n').replace(/\n{3,}/g,'\n\n').trim();
 }
 async function meetingMinutes(korean,opt={}){
   const topic=opt.topic?('\n이 회의의 분야·주제: '+opt.topic):'';
@@ -38055,9 +38073,10 @@ async function meetingMinutes(korean,opt={}){
   const strip=t=>String(t||'').replace(/^===\s*[^=\n]+===\s*$/gm,'').trim();
   const pick=r=>({overview:strip(grabSec(r,'개요')),themed:strip(grabSec(r,'정리')||r)});
   const fixOverview=async(mm)=>{   /* 개요가 비면 정리를 보고 한 번 더 */
+    mm.overview=minutesClean(mm.overview);mm.themed=minutesClean(mm.themed);
     if(mm.overview||!mm.themed)return mm;
     try{mm.overview=strip(await askClaude('아래 회의록 정리를 보고, 이 회의의 목적·진행 방식과 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작. 다른 말 없이 결과만 출력한다.'+topic
-      +'\n'+MINUTES_RULES+extra+'\n\n--- 정리 ---\n'+mm.themed,{max_tokens:1200}));}catch(_){}
+      +'\n'+MINUTES_RULES+extra+'\n\n--- 정리 ---\n'+mm.themed,{max_tokens:1200}));mm.overview=minutesClean(mm.overview);}catch(_){}
     return mm;};
   if(blocks.length<=1){
     opt.onStep&&opt.onStep('회의록으로 묶는 중…');
@@ -38074,20 +38093,20 @@ async function meetingMinutes(korean,opt={}){
     opt.onStep&&opt.onStep('주제별로 묶는 중 '+(i+1)+'/'+blocks.length);
     const r=await askLong(
       '아래는 회의 녹취를 한국어로 정리한 글의 일부다('+(i+1)+'/'+blocks.length+').'+topic
-      +'\n이 부분의 내용을 '+(type==='qa'?'질문 단위로(「#### Q. 질문 요지」 한 줄과 그 아래 답변 항목 「- 」, 질문이 아닌 부분은 「#### 헤드라인」)':'주제가 바뀌는 곳마다 「#### 헤드라인」 한 줄과 그 아래 개조식 항목 「- 」으로')+' 적는다. 번호는 붙이지 않는다.'
+      +'\n이 부분의 내용을 '+(type==='qa'?'질문 단위로 적는다. '+minutesShape('qa')+' 번호는 비워 「#### Q. 질문 요지」, 「#### 헤드라인」으로 쓴다.':'주제가 바뀌는 곳마다 「#### 헤드라인」 한 줄과 그 아래 개조식 항목 「- 」으로 적는다. 번호는 붙이지 않는다.')
       +(type==='topic'?'':' 말한 순서를 바꾸지 않는다.')
       +' 중요한 내용·수치는 빠뜨리지 않는다.\n'+MINUTES_RULES+extra
-      +'\n\n다른 말 없이 결과만 출력한다.'+endNote+'\n\n--- 정리한 글 ---\n'+blocks[i],{max_tokens:4000},opt.onStep);
+      +'\n\n다른 말 없이 결과만 출력한다.'+endNote+'\n\n--- 정리한 글 ---\n'+blocks[i],{max_tokens:6000},opt.onStep);
     drafts.push((r||'').trim());
   }
   /* 개요와 합치기를 동시에(따로) 부른다 — 한 번에 부르면 답이 길어 서버 한도(150초)에 걸려 실패하거나 몇 분씩 걸렸다. 한 번 실패하면 한 번 더 */
-  opt.onStep&&opt.onStep('주제 합치고 개요 쓰는 중…');
+  opt.onStep&&opt.onStep(type==='topic'?'주제 합치고 개요 쓰는 중…':'이어 붙이고 개요 쓰는 중…');
   const all=drafts.join('\n\n---\n\n');
   const ask2=async(fn)=>{try{return await fn();}catch(e){await new Promise(ok=>setTimeout(ok,1500));return fn();}};
   const [ov,th]=await Promise.all([
     ask2(()=>askClaude('아래는 한 회의의 녹취를 부분별로 묶은 초안들이다. 이 회의의 목적·진행 방식과, 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작하고 수치·결정은 정확히. 다른 말 없이 결과만 출력한다.'+topic
       +'\n'+MINUTES_RULES+extra+'\n\n--- 초안들 ---\n'+all,{max_tokens:1200})),
-    ask2(()=>askLong('아래는 한 회의의 녹취를 부분별로 묶은 초안들이다(녹취 순서). 하나의 회의록 정리로 합쳐라.'+topic
+    type!=='topic'?Promise.resolve(minutesStitch(drafts,type)):ask2(()=>askLong('아래는 한 회의의 녹취를 부분별로 묶은 초안들이다(녹취 순서). 하나의 회의록 정리로 합쳐라.'+topic
       +(type==='topic'
         ?'\n같은 주제는 하나로 합치고 겹치는 항목은 하나만 남긴다. 주제 3~10개. '
         :'\n초안의 순서를 그대로 잇는다. 초안 경계에서 같은 주제(같은 질문)가 이어지면 하나로 합치고, 겹치는 항목은 하나만 남긴다. 소제목 번호는 1부터 다시 매긴다. ')
@@ -38235,7 +38254,7 @@ function segsMd({korean,fx,segs,mm,progress}){
 /* 예전 이름 그대로 쓰는 곳(일정관리 앱 등)을 위해 남겨 둔다 — 결과는 정리 절 본문(마크다운) */
 async function polishTranscript(raw,opt={}){return (await polishStream(parseSegs(raw),opt)).md;}
 async function polishKorean(raw,opt={}){return polishTranscript(raw,{...opt,korean:true});}
-Object.assign(window,{MINUTES_TYPES,askLong,polishTranscript,polishKorean,polishStream,parsePolished,polishSegZh,polishSegKo,parseSegs,segsMd,TbSegQueue,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
+Object.assign(window,{MINUTES_TYPES,askLong,minutesStitch,minutesClean,polishTranscript,polishKorean,polishStream,parsePolished,polishSegZh,polishSegKo,parseSegs,segsMd,TbSegQueue,meetingMinutes,minutesMd,tbIsKorean,transcriptFixes,splitChunks,POLISH_CHUNK,MINUTES_BLOCK});
 </script>
 <script type="text/babel">/* ── ZIP 만들기 (Word 파일 저장에 쓴다) ─────────────────────
    외부 라이브러리 없이 직접 구현했다. 압축 없이 저장(store)한다 */
@@ -38279,7 +38298,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.68';
+const TB_VERSION='v10.69';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
