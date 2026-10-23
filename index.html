@@ -38130,6 +38130,28 @@ function minutesHead(r){
     if(!a||!b||(a==='구분'&&/^내용/.test(b)))continue;o.impl.push([a,b]);}
   return o;
 }
+/* v10.72: 요약본 — 정리본(녹취 순서, 빠짐없는 문서 수준)을 큰 절마다 보고용으로 줄인다(견본 KPICC_회의록_1021 분량, 원래의 1/4~1/3).
+   절·묶음 순서는 그대로, 「(추가)」 질문은 앞 질문에 합쳐도 되고 Q 번호는 앱이 다시 매긴다. 실패한 절은 정리본 그대로 둔다 */
+async function minutesSummary(themed,opt={}){
+  const parts=String(themed||'').split(/\n(?=####\s)/).map(x=>x.trim()).filter(Boolean);
+  const out=new Array(parts.length);let done=0,next=0;
+  const one=async i=>{const x=parts[i];let r='';
+    if(x.length>300&&/^####\s/.test(x)){
+      const q='아래는 회의록 정리본(녹취 순서대로 빠짐없이 적은 것)의 한 절이다. 이것을 보고용 요약본으로 줄인다.'+(opt.topic||'')
+        +'\n- 맨 앞 「#### 번호. 절 제목 (녹음 …)」 줄은 그대로 둔다.'
+        +'\n- 묶음 줄(「**□ …**」 「**○ …**」 「**Q번호. …**」)은 순서를 그대로 두고, 뒤의 괄호 녹음 위치 표시는 뺀다. 바로 이어지는 □ 묶음이 같은 이야기면 하나로 합치고, 「(추가)」 질문이 앞 질문의 연장이면 앞 질문의 답 아래로 합친다. 묶음 제목은 내용을 알 수 있게 다듬어도 된다.'
+        +'\n- 각 □·○ 묶음 아래는 핵심 사실·수치·판단만 「- 」 2~6개. Q 묶음 아래는 「- A. 핵심 답」(갈래가 여럿이면 「- A1. 」 「- A2. 」)과 꼭 필요한 근거·수치를 하위 항목 「  - 」 1~4개, 질문자 쪽 배경이 중요하면 「- 배경. …」, 결론이 있으면 「- 정리. …」.'
+        +'\n- 전체 분량은 원래의 1/4~1/3. 되풀이·곁가지·세부 사례는 빼되, 결정·할 일·수치·고객 요구·문제점은 남긴다. 없는 내용을 더하지 않는다. 수치는 그대로.'
+        +'\n'+MINUTES_RULES+(opt.extra||'')+'\n\n다른 말 없이 결과만 출력한다.\n다 쓰면 마지막 줄에 '+MINUTES_END+' 을 적는다.\n\n--- 정리본의 한 절 ---\n'+x;
+      for(let k=0;k<2&&!r.trim();k++){try{r=await askLong(q,{max_tokens:4000},null);}catch(e){if(k)console.warn('[요약본 절 실패]',e);}}
+      r=minutesClean(String(r||'').replace(/^===\s*[^=\n]+===\s*$/gm,'')).trim();
+      if(!/^####\s/.test(r)||!/^\s*-\s+\S/m.test(r))r='';}
+    out[i]=r||x.replace(/\*\*\s*\((?:녹음\d+\s+)?\d+:\d{2}\)/g,'**');done++;opt.onStep&&opt.onStep('요약본 만드는 중 '+done+'/'+parts.length);};
+  opt.onStep&&opt.onStep('요약본 만드는 중 0/'+parts.length);
+  await Promise.all(Array.from({length:Math.min(3,parts.length)},async()=>{while(next<parts.length)await one(next++);}));
+  let q=0;   /* Q 번호를 처음부터 다시 */
+  return out.join('\n\n').replace(/^(\*\*)Q\s*\d+\s*[.)]\s*/gm,(m,b)=>b+'Q'+(++q)+'. ').replace(/\n{3,}/g,'\n\n').trim();
+}
 async function meetingMinutes(korean,opt={}){
   const topic=opt.topic?('\n이 회의의 분야·주제: '+opt.topic):'';
   const type='seq';   /* v10.71: 정리 유형은 녹취 순서대로 하나로(hong) — opt.type은 무시 */
@@ -38208,7 +38230,8 @@ async function meetingMinutes(korean,opt={}){
         +'\n\n'+MINUTES_RULES+extra+'\n다른 말 없이 두 절만 출력한다.'+endNote+'\n\n--- 회의록 ---\n'+flat.slice(0,40000),{max_tokens:3000},null)).catch(()=>'')]);
     const themed=minutesOutline(H,st,marks.some(m=>/^녹음/.test(m||'')));
     const head=minutesHead(hd);
-    return {...head,themed:minutesClean(themed),overview:''};
+    const summary=await minutesSummary(minutesClean(themed),{topic,extra,onStep:opt.onStep});
+    return {...head,themed:minutesClean(themed),summary,overview:''};
   }
   if(blocks.length<=1){
     opt.onStep&&opt.onStep('회의록으로 묶는 중…');
@@ -38254,6 +38277,15 @@ function minutesMd(fx,mm){
   const cell=t=>String(t||'').replace(/\|/g,'/').replace(/\n+/g,' ').trim();
   const table=(h,rows)=>'| '+h[0]+' | '+h[1]+' |\n|---|---|\n'+rows.map(r=>'| '+cell(r[0])+' | '+cell(r[1])+' |').join('\n');
   /* v10.71: 견본(KPICC_회의록_1021) 모양 — 머리 표 · 회의 내용(녹취 순서) · 시사점 표 */
+  if(mm&&mm.summary){   /* v10.72: 요약본(보고용) → 정리본(녹취 순서, 빠짐없이) */
+    const secN=(mm.summary.match(/^####\s/gm)||[]).length;
+    return (note?note+'\n':'')+'### 요약본\n'+(mm.title?'**'+cell(mm.title)+'**'+(mm.sub?' — '+cell(mm.sub):'')+'\n\n':'')
+      +(mm.rows&&mm.rows.length?table(['항목','내용'],mm.rows)+'\n\n':'')
+      +mm.summary.trim()
+      +(mm.impl&&mm.impl.length?'\n\n#### '+(secN+1)+'. 시사점 및 검토 과제\n'+table(['구분','내용'],mm.impl):'')
+      +'\n\n※ 녹취가 불분명한 구간과 확인되지 않은 수치는 제외'
+      +'\n\n### 정리본 (녹취 순서)\n'+((mm.themed||'').trim()||'(정리본을 만들지 못했습니다)');
+  }
   if(mm&&(mm.rows||mm.impl)){
     const top=(mm.title?'**'+cell(mm.title)+'**'+(mm.sub?' — '+cell(mm.sub):'')+'\n\n':'')
       +(mm.rows&&mm.rows.length?table(['항목','내용'],mm.rows):(mm.overview||'').trim()||'(회의록 머리를 만들지 못했습니다)');
@@ -38385,7 +38417,7 @@ function parsePolished(md,any){   /* any: 끝난 기록의 조각도 읽는다(�
   }
   const fx={topic:((/^>\s*분야:\s*(.*?)\s*$/m.exec(sec)||[])[1]||'').trim(),
     fixes:(((/^>\s*바로잡은 낱말:\s*(.*?)\s*$/m.exec(sec)||[])[1]||'').split(' · ').map(x=>x.split('→')).filter(x=>x.length===2).map(([wrong,right])=>({wrong:wrong.trim(),right:right.trim()})))};
-  return segs.length?{korean:kor,segs,fx,done:/###\s*개요/.test(sec)}:null;
+  return segs.length?{korean:kor,segs,fx,done:/###\s*(개요|요약본)/.test(sec)}:null;
 }
 /* 정리 절 본문: (회의록 머리) + 조각별 「시각 · 번역 / 원문(인용)」 */
 function segsMd({korean,fx,segs,mm,progress}){
@@ -38441,7 +38473,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.71';
+const TB_VERSION='v10.72';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38967,25 +38999,47 @@ function tbExportParts(rec){
   const sec=tbSection(rec.md,'정리·번역')||tbSection(rec.md,'정리');
   if(sec){const body=sec.replace(/^>\s*정리(·번역)? 모델:.*$/m,'').replace(/^>\s*⏳.*$/gm,'').trim();
     const m=/\n?###\s*(번역 · 원문|정리본) \(조각별\)[^\n]*\n/.exec(body);
-    const main=(m?body.slice(0,m.index):body).trim();const fold=m?body.slice(m.index+m[0].length).trim():'';
+    let main=(m?body.slice(0,m.index):body).trim();let fold=m?body.slice(m.index+m[0].length).trim():'';
+    const f=/\n?###\s*정리본 \(녹취 순서\)[^\n]*\n/.exec(main);   /* v10.72: 일정 메모에는 요약본만 펼치고 정리본은 접는다 */
+    if(f){fold=main.slice(f.index+f[0].length).trim()+(fold?'\n\n'+fold:'');main=main.slice(0,f.index).replace(/###\s*요약본\s*\n/,'').trim();
+      return {md:head+'\n\n'+main,fold,foldTitle:'정리본 (녹취 순서) 보기'};}
     return {md:head+'\n\n'+main,fold,foldTitle:m?(m[1]==='정리본'?'정리본 (조각별) 보기':'번역 · 원문 (조각별) 보기'):''};}
   const raw=(tbSection(rec.md,'녹취')||tbSection(rec.md,'실시간 통역')||tbSection(rec.md,'실시간 원문')).replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').replace(/^>\s*(받아쓰기 모델|⏳).*$/gm,'').trim();
   return {md:head+'\n\n'+(raw||'(아직 받아쓴 글이 없습니다)'),fold:'',foldTitle:'',raw:true};}
+/* v10.72: 기록을 탭(받아쓰기 원본 / 정리본 / 요약본)으로 나눈다.
+   요약본 = 「### 요약본」(예전 기록은 조각별 앞의 개요·주제별 부분), 정리본 = 「### 정리본 (녹취 순서)」 + 조각별, 원본 = 녹취 등 나머지 절 */
+function tbSplitRec(md){
+  const chunks=String(md||'').split(/\n(?=##\s)/);
+  const o={head:'',raw:[],pre:'',sum:'',full:'',segs:'',segsTitle:'',memo:'',has:false};
+  chunks.forEach((c,i)=>{
+    if(!i&&!/^##\s/.test(c)){o.head=c.trim();return;}
+    if(/^##\s*AI 메모/.test(c)){o.memo=c.trim();return;}
+    if(!/^##\s*정리/.test(c)||o.has){o.raw.push(c.trim());return;}
+    o.has=true;const body=c.replace(/^[^\n]*\n?/,'');
+    const at=re=>{const m=re.exec(body);return m?m.index:-1;};
+    const iS=at(/(^|\n)###\s*요약본/),iF=at(/(^|\n)###\s*정리본 \(녹취 순서\)/),iG=at(/(^|\n)###\s*(번역 · 원문|정리본) \(조각별\)/),i3=at(/(^|\n)###\s/);
+    const end=(a,...bs)=>{const c2=bs.filter(b=>b>a);return c2.length?Math.min(...c2):body.length;};
+    o.pre=(i3<0?body:body.slice(0,i3)).trim();
+    if(iS>=0)o.sum=body.slice(iS,end(iS,iF,iG)).replace(/^\n?###\s*요약본[^\n]*\n?/,'').trim();
+    else if(i3>=0&&i3!==iG&&i3!==iF)o.sum=body.slice(i3,end(i3,iF,iG)).trim();   /* 예전 기록: 개요·주제별 */
+    if(iF>=0)o.full=body.slice(iF,end(iF,iG)).replace(/^\n?###\s*정리본 \(녹취 순서\)[^\n]*\n?/,'').trim();
+    if(iG>=0){o.segs=body.slice(iG).replace(/^\n?###[^\n]*\n?/,'').trim();o.segsTitle=/번역 · 원문/.test(body.slice(iG,iG+30))?'조각별 번역·원문':'조각별 정리본';}
+  });
+  o.raw=o.raw.join('\n\n');return o;
+}
 /* v10.71: Word로 따로 내보낼 세 부분 — 요약본(회의록) · 조각별 정리본 · 받아쓰기 원본 */
 function tbDocParts(rec){
   const title=rec.title||'녹취록';const when=localDay(rec.created)+' '+localHm(rec.created);
-  const sec=tbSection(rec.md,'정리·번역')||tbSection(rec.md,'정리');
-  const body=sec?sec.replace(/^>\s*정리(·번역)? 모델:.*$/m,'').replace(/^>\s*⏳.*$/gm,'').trim():'';
-  const m=/\n?###\s*(번역 · 원문|정리본) \(조각별\)[^\n]*\n/.exec(body);
-  const main=(m?body.slice(0,m.index):body).trim(),segs=m?body.slice(m.index+m[0].length).trim():'';
-  const mt=/^###\s*개요\s*\n\*\*([^*\n]+)\*\*(?:\s*—\s*([^\n]+))?/m.exec(main);   /* 회의록 머리의 제목·부제 */
-  const sum=mt?main.replace(mt[0],'### 개요'):main;
-  const raw=(tbSection(rec.md,'녹취')||tbSection(rec.md,'실시간 통역')||tbSection(rec.md,'실시간 원문')).replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').replace(/^>\s*⏳.*$/gm,'').trim();
+  const x=tbSplitRec(String(rec.md||'').replace(/^>\s*⏳.*$/gm,''));
+  const mt=/^\*\*([^*\n]+)\*\*(?:\s*—\s*([^\n]+))?\n/.exec(x.sum);   /* 요약본 머리의 제목·부제 */
+  const sum=mt?x.sum.slice(mt[0].length).trim():x.sum;
+  const raw=x.raw.replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
   const doc=(t,sub,b)=>'# '+t+'\n'+(sub?'**'+sub+'**\n\n':'')+'> '+when+'\n\n'+b;
   return {
-    sum:main?doc(mt?mt[1]:title,mt&&mt[2]?mt[2].trim():'',sum):'',
-    segs:segs?doc(title+' — '+(m[1]==='정리본'?'조각별 정리본':'조각별 번역·원문'),'',segs):'',
-    raw:raw?doc(title+' — 받아쓰기 원본','',raw):''};
+    raw:raw?doc(title+' — 받아쓰기 원본','',raw):'',
+    full:x.full?doc((mt?mt[1]:title)+' — 정리본',mt&&mt[2]?mt[2].trim():'',x.full):'',
+    sum:sum?doc(mt?mt[1]:title,mt&&mt[2]?mt[2].trim():'',sum+(x.memo?'\n\n'+x.memo:'')):'',
+    segs:x.segs?doc(title+' — '+x.segsTitle,'',x.segs):'',segsTitle:x.segsTitle};
 }
 function tbToEvent(ev,rec){
   const p=tbExportParts(rec);const src='tbrec:'+rec.id;
@@ -39018,7 +39072,7 @@ function TbExportDlg({rec,onClose,toast}){
     <div role="dialog" style={{background:'var(--surface-card,#fff)',borderRadius:14,boxShadow:'0 12px 40px rgba(0,0,0,.25)',width:'min(460px,100%)',maxHeight:'85vh',overflowY:'auto',padding:'18px 16px 12px'}}>
       <div style={{fontWeight:700,fontSize:16,marginBottom:4}}>📅 일정으로 내보내기</div>
       <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginBottom:10,lineHeight:1.5}}>
-        {p.raw?'아직 정리 전이라 받아쓴 글을 넣습니다. 정리를 마친 뒤 다시 내보내면 정리본으로 바뀝니다.':'회의록(개요·주제별 정리)을 넣고, 조각별 '+(p.foldTitle.startsWith('정리본')?'정리본':'번역·원문')+'은 접어서 함께 넣습니다.'}</div>
+        {p.raw?'아직 정리 전이라 받아쓴 글을 넣습니다. 정리를 마친 뒤 다시 내보내면 정리본으로 바뀝니다.':(/녹취 순서/.test(p.foldTitle)?'요약본을 넣고, 정리본(녹취 순서)과 조각별 정리는 접어서 함께 넣습니다.':'회의록(개요·주제별 정리)을 넣고, 조각별 '+(p.foldTitle.startsWith('정리본')?'정리본':'번역·원문')+'은 접어서 함께 넣습니다.')}</div>
       <label style={{display:'flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)',marginBottom:10}}>날짜
         <input type="date" value={day} onChange={x=>setDay(x.target.value)} style={{...inputStyle,width:'auto',padding:'4px 6px'}}/></label>
       {!evs&&!err&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)'}}>일정 불러오는 중…</div>}
@@ -39046,7 +39100,8 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   const elapsed=()=>{const s=Math.floor((Date.now()-busyAt.current)/1000);return s<60?s+'초':Math.floor(s/60)+'분 '+String(s%60).padStart(2,'0')+'초';};
   const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
   const [tidyOpen,setTidyOpen]=React.useState(false);
-  const [docOpen,setDocOpen]=React.useState(false);   /* 📄 Word 내려받기 선택창(v10.71) */   /* ✨ 정리하기 선택창(v10.65) */
+  const [docOpen,setDocOpen]=React.useState(false);
+  const [recTab,setRecTab]=React.useState('');const [segOpen,setSegOpen]=React.useState(false);   /* v10.72: 기록 탭(raw/full/sum) */   /* 📄 Word 내려받기 선택창(v10.71) */   /* ✨ 정리하기 선택창(v10.65) */
   const [askOpen,setAskOpen]=React.useState(false);const [askTxt,setAskTxt]=React.useState('');   /* 💬 AI에게 요청(v10.68) */
   const [,tickType]=React.useReducer(x=>x+1,0);
   /* 정리 유형 고르기 — 기록에 저장(rec.mtype), 새 기록 기본값은 설정(tbMinutesType) */
@@ -39229,7 +39284,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   /* v10.71: Word는 요약본 · 조각별 정리본 · 받아쓰기 원본을 따로(또는 전체) 내려받는다 */
   const exportDocx=(kind)=>{if(!cur)return;setDocOpen(false);
     try{const p=tbDocParts(cur);const md=kind==='all'?cur.md:p[kind];if(!md){toast('이 기록에는 그 부분이 아직 없습니다');return;}
-      const suf={sum:'_요약본',segs:'_조각별 정리본',raw:'_받아쓰기 원본',all:''}[kind];
+      const suf={sum:'_요약본',full:'_정리본',segs:'_조각별',raw:'_받아쓰기 원본',all:''}[kind];
       downloadBlob(mdToDocx(md),safeName(cur.title)+suf+'.docx');toast('Word 파일을 내려받았습니다');}catch(e){toast('⚠ 내보내기 실패 — '+e.message);}};
 
   const hasRaw=cur&&(tbSection(cur.md,'녹취')||tbSection(cur.md,'실시간 원문'));
@@ -39281,7 +39336,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>hasRaw?setTidyOpen(true):runTidy(cur)}
           title={'받아쓰기 '+tbSttName(Store.cfg.tbSttModel)+' · 정리 '+modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id)+' — '+(tbSection(cur.md,'녹취')?'받아쓴 글로 회의록(개요·주제별 정리)·한국어 번역·정리된 원문을 다시 만듭니다':'녹음을 처음부터 받아쓰고 이어서 한국어 번역과 회의록(개요·주제별 정리)을 만듭니다. 결과는 맨 위에 붙습니다')}>✨ 정리하기</Button>
         <Button variant="secondary" size="sm" disabled={!!busy||!hasRaw} onClick={()=>{setAskTxt(cur.mreq||'');setAskOpen(true);}} title="표준 정리로 안 되는 부분을 AI에게 직접 요청합니다 — 개요·주제별 정리를 요청대로 다시 쓰거나, 녹취에 대해 물어봅니다">💬 AI에게 요청</Button>
-        <Button variant="secondary" size="sm" disabled={!!busy} onClick={()=>setDocOpen(true)} title="이 기록을 Word 문서로 내려받습니다 — 요약본·조각별 정리본·받아쓰기 원본을 따로 고를 수 있습니다">📄 Word</Button>
+        <Button variant="secondary" size="sm" disabled={!!busy} onClick={()=>setDocOpen(true)} title="이 기록을 Word 문서로 내려받습니다 — 받아쓰기 원본·정리본·요약본을 따로 고를 수 있습니다">📄 Word</Button>
         <Button variant="secondary" size="sm" disabled={!!busy||Store.mode!=='supabase'} onClick={()=>cur.cal?tbCalExport(cur,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message)):setToCal(true)}
           title={cur.cal?'연결된 일정 『'+(cur.cal.title||'')+'』('+(cur.cal.date||'')+')의 메모에 바로 넣습니다':'정리된 내용을 일정관리 앱의 그날 일정 본문(메모)에 넣습니다'}>📅 {cur.cal?'일정에 넣기':'일정으로'}</Button>
         {cur.cal&&<Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setToCal(true)} title="연결된 일정 말고 다른 일정을 골라 넣습니다">다른 일정…</Button>}
@@ -39296,7 +39351,25 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
       {edit
         ?<textarea id="tbEdit" value={cur.md} onChange={e=>upd(cur.id,{md:e.target.value})}
           style={{...inputStyle,border:'none',borderRadius:0,minHeight:mobile?'60vh':'calc(100vh - 330px)',padding:'12px 14px',lineHeight:1.75,fontSize:13.5,resize:'vertical'}}/>
-        :<div style={{padding:'12px 16px',overflowY:'auto',maxHeight:mobile?'none':'calc(100vh - 300px)'}}><Markdown md={shown}/></div>}
+        :<div style={{padding:'12px 16px',overflowY:'auto',maxHeight:mobile?'none':'calc(100vh - 300px)'}}>{(()=>{
+          const x=tbSplitRec(shown);if(!x.has)return <Markdown md={shown}/>;
+          const has={raw:!!x.raw,full:!!(x.full||x.segs),sum:!!(x.sum||x.memo)};
+          const tab=recTab&&has[recTab]?recTab:has.sum?'sum':has.full?'full':'raw';
+          const T=[['raw','받아쓰기 원본'],['full','정리본'],['sum','요약본']];
+          const pre=x.pre?x.pre+'\n\n':'';
+          return <>{x.head&&<Markdown md={x.head}/>}
+            <div style={{display:'flex',gap:0,borderBottom:'1px solid var(--border-default)',margin:'4px 0 12px',position:'sticky',top:-12,background:'#fff',zIndex:1}}>
+              {T.map(([k,l])=><button key={k} type="button" disabled={!has[k]} onClick={()=>setRecTab(k)}
+                style={{padding:'8px 16px',border:'none',borderBottom:tab===k?'2px solid var(--text-body)':'2px solid transparent',background:'none',cursor:has[k]?'pointer':'default',
+                  fontWeight:tab===k?700:400,color:has[k]?'var(--text-body)':'var(--text-label)',fontSize:'var(--fs-md2)',fontFamily:'var(--font-sans)'}}>{l}</button>)}</div>
+            {tab==='raw'&&<Markdown md={x.raw}/>}
+            {tab==='sum'&&<Markdown md={pre+(x.sum||'')+(x.memo?'\n\n'+x.memo:'')}/>}
+            {tab==='full'&&<>{<Markdown md={pre+(x.full||'')}/>}
+              {x.segs&&(x.full
+                ?<><button type="button" onClick={()=>setSegOpen(!segOpen)} style={{margin:'14px 0 8px',padding:'6px 10px',border:'1px solid var(--border-default)',borderRadius:6,background:'#fff',cursor:'pointer',fontSize:'var(--fs-sm2)'}}>{segOpen?'▾':'▸'} {x.segsTitle} {segOpen?'접기':'보기'}</button>
+                  {segOpen&&<Markdown md={x.segs}/>}</>
+                :<Markdown md={'### '+x.segsTitle+'\n'+x.segs}/>)}</>}
+          </>;})()}</div>}
     </div>;
 
   /* 파일을 고르기 전에 녹음 언어부터 고른다 — 고른 언어는 다음에도 기본으로 */
@@ -39317,10 +39390,11 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         const sub={display:'block',fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:2};
         const it=(k,t,d)=><button key={k} type="button" style={{...row,opacity:k==='all'||p[k]?1:.5}} disabled={k!=='all'&&!p[k]} onClick={()=>exportDocx(k)}><b>{t}</b><span style={sub}>{k==='all'||p[k]?d:'이 기록에는 아직 없습니다'}</span></button>;
         return <Modal open onClose={()=>setDocOpen(false)} title="📄 Word로 내려받기" width={420}>
-          {it('sum','1. 요약본','회의록 머리 · 녹취 순서대로 정리한 회의 내용 · 시사점')}
-          {it('segs','2. 조각별 정리본','2분 30초 조각마다 정리'+(/번역 · 원문 \(조각별\)/.test(cur.md)?'한 번역과 원문':'한 글'))}
-          {it('raw','3. 받아쓰기 원본','기계가 받아쓴 글 그대로(녹음·시각별)')}
-          {it('all','전체 한 파일','위 세 가지를 모두 한 문서로')}
+          {it('raw','1. 받아쓰기 원본','기계가 받아쓴 글 그대로(녹음·시각별)')}
+          {it('full','2. 정리본','녹취 순서대로 빠짐없이 정리한 회의록(문서 수준)')}
+          {it('sum','3. 요약본','보고용 — 회의록 머리 · 큰 절별 핵심 · 시사점')}
+          {it('segs','4. '+(p.segsTitle||'조각별 정리'),'2분 30초 조각마다 정리'+(/번역/.test(p.segsTitle)?'한 번역과 원문':'한 글'))}
+          {it('all','전체 한 파일','모두 한 문서로')}
         </Modal>;})()}
       {tidyOpen&&cur&&(()=>{   /* v10.65: 끊긴 기록을 처음부터 다시 돌리지 않도록, 어디부터 할지 고른다 */
         const raw=tbSection(cur.md,'녹취')||tbSection(cur.md,'실시간 원문');const rawN=raw?parseSegs(raw.replace(/^>.*$/gm,'').trim()).length:0;
