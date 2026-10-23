@@ -38012,7 +38012,8 @@ const tbIsKorean=t=>{const s=String(t||'');const ko=(s.match(/[가-힣]/g)||[]).
    번역(또는 한국어 정리본)은 아직 「말한 순서대로의 글」이다. 회의록은 주제별로 다시 묶어야 한다:
    개요(3~5줄) → 주제별 헤드라인 → 개조식 항목(같은 말 반복은 하나로).
    긴 글은 블록별로 먼저 묶고, 마지막에 한 번 더 합쳐 중복을 지운다. */
-const MINUTES_BLOCK=12000;   /* 한 번에 넘기는 글자 수 */
+const MINUTES_BLOCK=12000;
+const MINUTES_UNIT=2500;   /* v10.70: 녹취 순서 정리 한 구간의 글자 수(조각 최대 4개 ≈ 10분) */   /* 한 번에 넘기는 글자 수 */
 /* v10.66: 낱말만 늘어놓거나 지나치게 줄인 정리가 읽기 힘들다는 의견 — 누가 무엇을 소개·질문·답변했는지 살린 완결된 한 줄로,
    질의응답은 한 항목에 묶고, 받아쓰기가 불분명한 수치는 뺀다 */
 const MINUTES_RULES='규칙: 개조식(명사형으로 끝맺음, 「~했습니다」 같은 서술형 금지).'
@@ -38056,7 +38057,7 @@ function minutesStitch(drafts,type){
     for(const ln of String(d||'').split('\n')){
       const m=/^####\s*(Q)?\s*\d*\s*[.)]?\s*(.*)$/.exec(ln);
       if(m){const isQ=!!m[1]||(type==='qa'&&/^Q\b/.test(ln.replace(/^####\s*/,'')));const title=m[2].replace(/^Q\s*\d*\s*[.)]?\s*/,'').trim();
-        const key=(isQ?'Q':'')+title.replace(/\s+/g,'');
+        const key=(isQ?'Q':'')+title.replace(/\s*\(\d+:\d{2}~\)\s*$/,'').replace(/\s+/g,'');
         if(key&&key===last)continue;   /* 경계에서 같은 소제목 */
         last=key;out.push('#### '+(isQ?'Q'+(++q):(++n))+'. '+title);continue;}
       if(ln.trim()||out.length)out.push(ln);
@@ -38078,6 +38079,46 @@ async function meetingMinutes(korean,opt={}){
     try{mm.overview=strip(await askClaude('아래 회의록 정리를 보고, 이 회의의 목적·진행 방식과 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작. 다른 말 없이 결과만 출력한다.'+topic
       +'\n'+MINUTES_RULES+extra+'\n\n--- 정리 ---\n'+mm.themed,{max_tokens:1200}));mm.overview=minutesClean(mm.overview);}catch(_){}
     return mm;};
+  /* v10.70: 녹취 순서·Q&A — 조각별 정리를 약 10분 구간으로 나눠 구간마다 빠짐없이 정리하고 그대로 잇는다.
+     큰 덩어리(1만 2천 자)를 한 번에 묶게 하면 모델이 중요하다고 본 것만 남기고 가운데 수십 분을 통째로 빼먹었다(KPICC 15~95분).
+     구간이 작아 답이 잘리지 않고, 실패한 구간은 조각별 정리 문장을 그대로 넣어 내용이 사라지지 않게 한다 */
+  if(type!=='topic'&&Array.isArray(opt.segs)&&opt.segs.length){
+    const tm=l=>{const m=/(\d+:\d{2})\s*[–-]\s*(\d+:\d{2})\s*$/.exec(String(l||''));return m?[m[1],m[2]]:null;};
+    const units=[];let u=null;
+    for(const g of opt.segs){const ko=String(g.ko||'').trim();if(!ko)continue;
+      if(!u||u.text.length>=MINUTES_UNIT||u.n>=4){u={text:'',n:0,a:null,b:null};units.push(u);}
+      const t=tm(g.label);if(t){if(!u.a)u.a=t[0];u.b=t[1];}
+      u.text+=(u.text?'\n\n':'')+ko;u.n++;}
+    const range=x=>x.a?x.a+'~'+x.b:'';
+    const fallback=x=>x.text.split(/(?<=[.!?。])\s+|\n+/).map(t=>t.trim()).filter(t=>t.length>4).map(t=>'- '+t).join('\n');
+    const outs=new Array(units.length);let done=0,next=0;
+    const one=async i=>{const x=units[i];const prevTxt=i?units[i-1].text.slice(-600):'';
+      const q='아래는 회의 녹취를 한국어로 정리한 글 중 한 구간'+(range(x)?'('+range(x)+')':'')+'이다. 이 구간을 회의록으로 적는다.'+topic
+        +(prevTxt?'\n\n(앞 구간 끝부분 — 맥락 참고용, 다시 적지 않는다)\n'+prevTxt:'')
+        +'\n\n- 말한 순서를 그대로 따른다. 앞뒤를 바꾸거나 다른 주제 밑으로 옮기지 않는다.'
+        +'\n- 이 구간에서 나온 논점·사실·수치·사례·질문·답변·의견을 하나도 빼지 않는다. 품질·시장 규모·가격·물류·결제·조직 등 어떤 주제든 중요도를 따져 생략하지 않는다. 뺄 수 있는 것은 인사·잡담·같은 말 되풀이뿐이다.'
+        +'\n- '+(type==='qa'?minutesShape('qa')+' 번호는 비워 「#### Q. 질문 요지」, 「#### 헤드라인」으로 쓴다.':'주제가 바뀌는 곳마다 「#### 헤드라인」 한 줄(번호 없이), 그 아래 개조식 항목 「- 」. 질문과 답변이 오가면 「- **Q** …」 「- **A** …」로 나눠 적는다.')
+        +'\n- 앞 구간에서 하던 이야기가 이어지면 맨 앞에 소제목 없이 항목부터 적는다.'
+        +'\n'+MINUTES_RULES+extra+'\n\n다른 말 없이 결과만 출력한다.'+endNote+'\n\n--- 이 구간 글 ---\n'+x.text;
+      let r='';
+      for(let k=0;k<2&&!r.trim();k++){try{r=await askLong(q,{max_tokens:4000},null);}catch(e){if(k)console.warn('[회의록 구간 실패]',range(x),e);}}
+      r=strip(r);
+      const lines=(r.match(/^\s*[-*]\s+\S/gm)||[]).length;
+      if(!lines){r=fallback(x);x.fb=true;}
+      outs[i]=r;done++;opt.onStep&&opt.onStep('녹취 순서대로 정리 중 '+done+'/'+units.length);};
+    opt.onStep&&opt.onStep('녹취 순서대로 정리 중 0/'+units.length);
+    await Promise.all(Array.from({length:Math.min(3,units.length)},async()=>{while(next<units.length)await one(next++);}));
+    /* 구간 시작 시각을 소제목에 붙이고, 구간 맨 앞의 소제목 없는 항목은 앞 구간에 잇는다 */
+    const drafts=outs.map((r,i)=>{const x=units[i];const st=x.a?' ('+x.a+'~)':'';
+      return r.split('\n').map(ln=>/^####\s/.test(ln)?ln.replace(/\s*$/,'')+st:ln).join('\n')+(x.fb?'\n- (이 구간은 자동 정리에 실패해 조각별 정리 문장을 그대로 옮김)':'');});
+    let themed=minutesStitch(drafts,type);
+    if(!/^####\s/.test(themed))themed='#### 1. 시작'+(units[0].a?' ('+units[0].a+'~)':'')+'\n'+themed;
+    opt.onStep&&opt.onStep('개요 쓰는 중…');
+    let overview='';
+    try{overview=strip(await askClaude('아래 회의록(녹취 순서)을 보고, 이 회의의 목적·참석/진행 방식과, 무엇을 다뤘고 무엇이 정해졌는지 개요를 4~6줄로 쓴다. 각 줄 「- 」로 시작하고 완결된 문장으로 끝맺는다. 다룬 주제를 빠뜨리지 않는다. 다른 말 없이 결과만 출력한다.'+topic
+      +'\n'+MINUTES_RULES+extra+'\n\n--- 회의록 ---\n'+themed.slice(0,40000),{max_tokens:3000}));}catch(_){}
+    return fixOverview({overview,themed});
+  }
   if(blocks.length<=1){
     opt.onStep&&opt.onStep('회의록으로 묶는 중…');
     const r=await askLong(
@@ -38220,7 +38261,7 @@ async function polishStream(src,opt={}){
     opt.onProgress&&opt.onProgress({korean,fx,segs:segs.slice()});
   }
   if(!segs.length)throw new Error('정리할 글이 없습니다');
-  const mm=await meetingMinutes(segs.map(s=>s.ko).join('\n\n'),{topic:fx.topic,onStep:opt.onStep,type:opt.mtype,extra:opt.mextra});
+  const mm=await meetingMinutes(segs.map(s=>s.ko).join('\n\n'),{topic:fx.topic,onStep:opt.onStep,type:opt.mtype,extra:opt.mextra,segs});
   const res={korean,fx,segs,mm};res.md=segsMd(res);return res;
 }
 /* 정리 도중 끊긴 기록에서 이미 끝낸 조각 읽기 — 진행 줄(⏳)이 남아 있고 조각마다 시각 머리(####)가 있을 때만 */
@@ -38298,7 +38339,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.69';
+const TB_VERSION='v10.70';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38993,7 +39034,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     const pm=modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id);
     setBusy('개요·주제별 정리 준비 중… ('+pm+')');
     try{
-      const mm=await meetingMinutes(pre.segs.map(x=>x.ko).join('\n\n'),{topic:pre.fx.topic,onStep:m=>setBusy(m+' ('+pm+')'),type:rec.mtype||Store.cfg.tbMinutesType,extra:rec.mreq});
+      const mm=await meetingMinutes(pre.segs.map(x=>x.ko).join('\n\n'),{topic:pre.fx.topic,onStep:m=>setBusy(m+' ('+pm+')'),type:rec.mtype||Store.cfg.tbMinutesType,extra:rec.mreq,segs:pre.segs});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
       const fin={...rec,md:putPolish(rec.md,{korean:pre.korean,fx:pre.fx,segs:pre.segs,mm},pm,pre.segs.length)};upd(rec.id,{md:fin.md});
       toast('개요·주제별 정리를 다시 만들었습니다');
