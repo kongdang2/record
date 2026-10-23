@@ -38039,14 +38039,19 @@ async function meetingMinutes(korean,opt={}){
       +'\n\n다른 말 없이 결과만 출력한다.\n\n--- 정리한 글 ---\n'+blocks[i],{max_tokens:3000});
     drafts.push((r||'').trim());
   }
+  /* v10.64: 개요와 주제 합치기를 동시에(따로) 부른다 — 한 번에 부르면 답이 길어 서버 한도(150초)에 걸려 실패하거나 몇 분씩 걸렸다. 한 번 실패하면 한 번 더 */
   opt.onStep&&opt.onStep('주제 합치고 개요 쓰는 중…');
-  const r=await askClaude(
-    '아래는 한 회의의 녹취를 부분별로 주제 분류한 초안들이다. 하나의 회의록으로 합쳐라.'+topic
-    +'\n\n===개요=== 절: 이 회의가 무엇을 다뤘고 무엇이 정해졌는지 3~5줄, 각 줄 「- 」로 시작.'
-    +'\n===정리=== 절: 같은 주제는 하나로 합치고 겹치는 항목은 하나만 남긴다. 주제 3~10개, 「#### 번호. 헤드라인」 뒤에 개조식 항목 「- 」.'
-    +' 항목을 요약해 줄이지 말고 내용은 다 살린다.\n'+MINUTES_RULES+MINUTES_FORM
-    +'\n\n--- 초안들 ---\n'+drafts.join('\n\n---\n\n'),{max_tokens:4000});
-  return pick(r);
+  const all=drafts.join('\n\n---\n\n');
+  const ask2=async(q,o)=>{try{return await askClaude(q,o);}catch(e){await new Promise(ok=>setTimeout(ok,1500));return askClaude(q,o);}};
+  const [ov,th]=await Promise.all([
+    ask2('아래는 한 회의의 녹취를 부분별로 주제 분류한 초안들이다. 이 회의가 무엇을 다뤘고 무엇이 정해졌는지 개요를 3~5줄로 쓴다. 각 줄 「- 」로 시작하고 수치·결정은 정확히. 다른 말 없이 결과만 출력한다.'+topic
+      +'\n'+MINUTES_RULES+'\n\n--- 초안들 ---\n'+all,{max_tokens:600}),
+    ask2('아래는 한 회의의 녹취를 부분별로 주제 분류한 초안들이다. 하나의 회의록 정리로 합쳐라.'+topic
+      +'\n같은 주제는 하나로 합치고 겹치는 항목은 하나만 남긴다. 주제 3~10개, 「#### 번호. 헤드라인」 뒤에 개조식 항목 「- 」.'
+      +' 항목을 요약해 줄이지 말고 내용은 다 살린다. 개요는 쓰지 않는다. 다른 말 없이 결과만 출력한다.\n'+MINUTES_RULES
+      +'\n\n--- 초안들 ---\n'+all,{max_tokens:4000})]);
+  const strip=t=>String(t||'').replace(/^===\s*[^=]+===\s*$/gm,'').trim();
+  return {overview:strip(grabSec(ov,'개요')||ov),themed:strip(grabSec(th,'정리')||th)};
 }
 /* 정리 절 머리: 분야·교정표 메모 + 개요 + 주제별 정리 */
 function minutesMd(fx,mm){
@@ -38229,7 +38234,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.63';
+const TB_VERSION='v10.64';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -38801,7 +38806,10 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   React.useEffect(()=>{if(TB_EMBED&&TB_LINK&&TB_LINK.file)setLangOpen(true);},[]);   /* 일정앱 상자 안 「음성 파일로 전사」 — 열리자마자 언어 고르기부터 */
   const mobile=useMobile();
   const cur=recs.find(r=>r.id===sel)||null;
-  const [busy,setBusy]=React.useState('');const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
+  const [busy,setBusy]=React.useState('');const busyAt=React.useRef(0);const [,tick]=React.useReducer(x=>x+1,0);   /* v10.64: 단계가 바뀐 뒤 흐른 시간을 보여 멈춘 게 아님을 알린다 */
+  React.useEffect(()=>{busyAt.current=Date.now();if(!busy)return;const t=setInterval(tick,1000);return()=>clearInterval(t);},[busy]);
+  const elapsed=()=>{const s=Math.floor((Date.now()-busyAt.current)/1000);return s<60?s+'초':Math.floor(s/60)+'분 '+String(s%60).padStart(2,'0')+'초';};
+  const [edit,setEdit]=React.useState(false);const [lang,setLang]=React.useState(Store.cfg.sttLang||'zh');
   const [q,setQ]=React.useState('');const [confirmDel,setConfirmDel]=React.useState(false);const [toCal,setToCal]=React.useState(false);
   /* 체크박스로 여러 개 골라 지우기 */
   const [pick,setPick]=React.useState(()=>new Set());const [askMany,setAskMany]=React.useState(false);const [delBusy,setDelBusy]=React.useState(false);
@@ -38992,7 +39000,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
           ?<span style={{display:'inline-flex',gap:4,alignItems:'center',fontSize:'var(--fs-sm2)',flexWrap:'wrap'}}>{tbRecPaths(cur).length?'녹음 '+tbRecPaths(cur).length+'개까지 ':''}영구 삭제할까요? (되돌릴 수 없음)<Button variant="danger" size="sm" onClick={()=>{remove(cur.id,cur);setConfirmDel(false);}}>삭제</Button><Button variant="ghost" size="sm" onClick={()=>setConfirmDel(false)}>취소</Button></span>
           :<Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setConfirmDel(true)}>🗑</Button>}
       </div>
-      {busy&&<div style={{padding:'8px 12px'}}><InfoBar>⏳ {busy} — 창을 닫지 마세요</InfoBar></div>}
+      {busy&&<div style={{padding:'8px 12px'}}><InfoBar>⏳ {busy} · {elapsed()} — 창을 닫지 마세요{/^주제 합치고|^회의록으로/.test(busy)?' (이 단계는 보통 1~3분, 서버 한도 150초를 넘기면 실패로 표시됩니다)':''}</InfoBar></div>}
       {audioRefs(cur.md).length>0&&<TbAudioSet key={cur.id} refs={audioRefs(cur.md)} live={cur.live}/>}
       {edit
         ?<textarea id="tbEdit" value={cur.md} onChange={e=>upd(cur.id,{md:e.target.value})}
