@@ -38507,7 +38507,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.81';
+const TB_VERSION='v10.82';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39135,7 +39135,7 @@ function tbDocParts(rec){
   return {
     raw:raw?doc(title+' — 받아쓰기 원본','',raw):'',
     full:x.segs?doc(title+' — 정리본','',x.segs):'',   /* v10.81: 정리본 = 스크립트를 검토해 다듬은 글(요약·개조식 아님) */
-    detail:x.full?doc((mt?mt[1]:title)+' — 요약본 (자세히, 녹취 순서)',mt&&mt[2]?mt[2].trim():'',x.full):'',
+    sumfull:sum&&x.segs?doc(mt?mt[1]:title,mt&&mt[2]?mt[2].trim():'','## 요약본\n\n'+sum+'\n\n## 정리본\n\n'+x.segs):'',   /* v10.82: 요약본 + 정리본 한 파일(hong) */
     sum:sum?doc(mt?mt[1]:title,mt&&mt[2]?mt[2].trim():'',sum+(x.memo?'\n\n'+x.memo:'')):'',
     segs:x.segs?doc(title+' — '+x.segsTitle,'',x.segs):'',segsTitle:x.segsTitle};
 }
@@ -39451,7 +39451,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
   /* v10.71: Word는 요약본 · 조각별 정리본 · 받아쓰기 원본을 따로(또는 전체) 내려받는다 */
   const exportDocx=(kind)=>{if(!cur)return;setDocOpen(false);
     try{const p=tbDocParts(cur);const md=kind==='all'?cur.md:p[kind];if(!md){toast('이 기록에는 그 부분이 아직 없습니다');return;}
-      const suf={sum:'_요약본',full:'_정리본',segs:'_조각별',raw:'_받아쓰기 원본',all:''}[kind];
+      const suf={sum:'_요약본',full:'_정리본',sumfull:'_요약본+정리본',segs:'_조각별',raw:'_받아쓰기 원본',all:''}[kind];
       downloadBlob(mdToDocx(md),safeName(cur.title)+suf+'.docx');toast('Word 파일을 내려받았습니다');}catch(e){toast('⚠ 내보내기 실패 — '+e.message);}};
 
   const hasRaw=cur&&(tbSection(cur.md,'녹취')||tbSection(cur.md,'실시간 원문'));
@@ -39563,7 +39563,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
           {it('raw','1. 받아쓰기 원본','실시간 통역 원문 스크립트(없으면 녹음을 받아쓴 글)')}
           {it('full','2. 정리본','스크립트를 검토해 다듬은 글 — 요약·개조식 없이'+(/번역/.test(p.segsTitle||'')?' (번역과 원문)':''))}
           {it('sum','3. 요약본','순서대로 소제목 + 개조식 — 회의록 머리 · 시사점')}
-          {it('detail','4. 요약본 (자세히)','녹취 순서대로 빠짐없이 소제목·개조식으로 정리한 긴 판')}
+          {it('sumfull','4. 요약본 + 정리본','요약본 뒤에 정리본을 이어 한 파일로')}
           {it('all','전체 한 파일','모두 한 문서로')}
         </Modal>;})()}
       {tidyOpen&&cur&&(()=>{   /* v10.65: 끊긴 기록을 처음부터 다시 돌리지 않도록, 어디부터 할지 고른다 */
