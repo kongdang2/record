@@ -38507,7 +38507,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.82';
+const TB_VERSION='v10.83';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39275,7 +39275,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     return <div style={{marginTop:8,fontSize:'var(--fs-sm2)'}}><div style={{color:'var(--text-label)',marginBottom:4}}>정리 유형</div>
       <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>{MINUTES_TYPES.map(t=><label key={t.id} style={{cursor:'pointer'}} title={t.desc}><input type="radio" name="tbMType" checked={v===t.id} onChange={()=>{Store.saveCfg({tbMinutesType:t.id});if(rec)upd(rec.id,{mtype:t.id});tickType();}}/> {t.label}</label>)}</div>
       <div style={{color:'var(--text-label)',marginTop:3}}>{(MINUTES_TYPES.find(t=>t.id===v)||{}).desc}</div></div>;};
-  const [q,setQ]=React.useState('');const [confirmDel,setConfirmDel]=React.useState(false);const [toCal,setToCal]=React.useState(false);const [calMany,setCalMany]=React.useState(false);
+  const [q,setQ]=React.useState('');const [confirmDel,setConfirmDel]=React.useState(false);const [toCal,setToCal]=React.useState(false);const [calMany,setCalMany]=React.useState(false);const [docMany,setDocMany]=React.useState(false);const [docJoin,setDocJoin]=React.useState('one');
   /* 체크박스로 여러 개 골라 지우기 */
   const [pick,setPick]=React.useState(()=>new Set());const [askMany,setAskMany]=React.useState(false);const [delBusy,setDelBusy]=React.useState(false);
   const togPick=id=>{setAskMany(false);setPick(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});};
@@ -39472,7 +39472,8 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
             <Button variant="danger" size="sm" disabled={delBusy} onClick={async()=>{setDelBusy(true);
               try{await removeMany([...pick].filter(id=>recs.some(r=>r.id===id)));setPick(new Set());setAskMany(false);}catch(_){}setDelBusy(false);}}>{delBusy?'삭제 중…':'삭제'}</Button>
             <Button variant="ghost" size="sm" disabled={delBusy} onClick={()=>setAskMany(false)}>취소</Button></span>
-          :<><Button variant="secondary" size="sm" disabled={Store.mode!=='supabase'} onClick={()=>setCalMany(true)} title="고른 기록을 일정관리 앱 일정에 넣습니다 — 각자 날짜로, 또는 한 일정에 모두">📅 일정으로</Button>
+          :<><Button variant="secondary" size="sm" onClick={()=>setDocMany(true)} title="고른 기록을 Word로 한 번에 — 한 파일로 합치거나 파일마다 따로(ZIP)">📄 Word</Button>
+            <Button variant="secondary" size="sm" disabled={Store.mode!=='supabase'} onClick={()=>setCalMany(true)} title="고른 기록을 일정관리 앱 일정에 넣습니다 — 각자 날짜로, 또는 한 일정에 모두">📅 일정으로</Button>
             <Button variant="danger" size="sm" onClick={()=>setAskMany(true)}>🗑 선택 삭제</Button>
             <Button variant="ghost" size="sm" onClick={()=>setPick(new Set())}>선택 해제</Button></>)}
       </div>}
@@ -39555,6 +39556,33 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
           {cur.mreq&&<Button variant="ghost" onClick={()=>{setAskOpen(false);upd(cur.id,{mreq:''});toast('저장된 AI 요청을 지웠습니다 — 다음 정리부터 표준 규칙만 씁니다');}}>저장된 요청 지우기</Button>}
         </div>
       </Modal>}
+      {docMany&&pickN>0&&(()=>{   /* v10.83: 여러 기록 Word 한 번에(hong) — 녹음 시간 순서 */
+        const rs=[...picked].sort((a,b)=>tbRecStart(a)-tbRecStart(b));const ps=rs.map(r=>({r,p:tbDocParts(r)}));
+        const row={display:'block',width:'100%',textAlign:'left',padding:'10px 12px',marginTop:8,border:'1px solid var(--border-default)',borderRadius:6,background:'#fff',cursor:'pointer',lineHeight:1.5};
+        const sub={display:'block',fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:2};
+        const suf={sum:'_요약본',full:'_정리본',sumfull:'_요약본+정리본',raw:'_받아쓰기 원본',all:''};
+        const go=async k=>{const got=ps.map(({r,p})=>({r,md:k==='all'?r.md:p[k]})).filter(x=>x.md);
+          if(!got.length){toast('고른 기록에 그 부분이 아직 없습니다');return;}
+          try{const day=localDay(new Date().toISOString());
+            if(docJoin==='one')downloadBlob(mdToDocx(got.map(x=>x.md).join('\n\n')),safeName('통번역 기록 '+got.length+'건 '+day)+suf[k]+'.docx');
+            else{const used={};const files=[];
+              for(const x of got){let n=safeName(x.r.title)+suf[k];if(used[n])n+=' ('+(++used[n])+')';else used[n]=1;
+                files.push({name:n+'.docx',bytes:new Uint8Array(await mdToDocx(x.md).arrayBuffer())});}
+              const u=URL.createObjectURL(zipMake(files));const a=document.createElement('a');a.href=u;a.download=safeName('통번역 기록 '+got.length+'건 '+day)+suf[k]+'.zip';
+              document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(u);a.remove();},1500);}
+            setDocMany(false);}catch(e){toast('⚠ 내보내기 실패 — '+e.message);}};
+        const it=(k,t,d)=>{const n=k==='all'?ps.length:ps.filter(x=>x.p[k]).length;
+          return <button key={k} type="button" style={{...row,opacity:n?1:.5}} disabled={!n} onClick={()=>go(k)}><b>{t}</b><span style={sub}>{d}{n<ps.length?' · '+n+'/'+ps.length+'개에 있음':''}</span></button>;};
+        return <Modal open onClose={()=>setDocMany(false)} title={'📄 Word로 내려받기 · '+ps.length+'개 기록'} width={420}>
+          <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:'var(--fs-sm2)'}}>
+            <label style={{cursor:'pointer'}}><input type="radio" name="tbDocJoin" checked={docJoin==='one'} onChange={()=>setDocJoin('one')}/> 한 파일로 합치기 (녹음 시간 순서)</label>
+            <label style={{cursor:'pointer'}}><input type="radio" name="tbDocJoin" checked={docJoin==='zip'} onChange={()=>setDocJoin('zip')}/> 기록마다 따로 (ZIP)</label></div>
+          {it('raw','1. 받아쓰기 원본','실시간 통역 원문 스크립트(없으면 녹음을 받아쓴 글)')}
+          {it('full','2. 정리본','스크립트를 검토해 다듬은 글')}
+          {it('sum','3. 요약본','순서대로 소제목 + 개조식')}
+          {it('sumfull','4. 요약본 + 정리본','기록마다 요약본 뒤에 정리본')}
+          {it('all','전체','기록마다 모두')}
+        </Modal>;})()}
       {docOpen&&cur&&(()=>{const p=tbDocParts(cur);
         const row={display:'block',width:'100%',textAlign:'left',padding:'10px 12px',marginTop:8,border:'1px solid var(--border-default)',borderRadius:6,background:'#fff',cursor:'pointer',lineHeight:1.5};
         const sub={display:'block',fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:2};
