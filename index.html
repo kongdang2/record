@@ -38507,7 +38507,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.80';
+const TB_VERSION='v10.81';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39094,7 +39094,7 @@ function tbExportParts(rec){
     let main=(m?body.slice(0,m.index):body).trim();let fold=m?body.slice(m.index+m[0].length).trim():'';
     const f=/\n?###\s*정리본 \(녹취 순서\)[^\n]*\n/.exec(main);   /* v10.72: 일정 메모에는 요약본만 펼치고 정리본은 접는다 */
     if(f){fold=main.slice(f.index+f[0].length).trim()+(fold?'\n\n'+fold:'');main=main.slice(0,f.index).replace(/###\s*요약본\s*\n/,'').trim();
-      return {md:head+'\n\n'+main,fold,foldTitle:'정리본 (녹취 순서) 보기'};}
+      return {md:head+'\n\n'+main,fold,foldTitle:'요약본 자세히(녹취 순서) · 정리본 보기'};}
     return {md:head+'\n\n'+main,fold,foldTitle:m?(m[1]==='정리본'?'정리본 (조각별) 보기':'번역 · 원문 (조각별) 보기'):''};}
   const raw=(tbSection(rec.md,'녹취')||tbSection(rec.md,'실시간 통역')||tbSection(rec.md,'실시간 원문')).replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').replace(/^>\s*(받아쓰기 모델|⏳).*$/gm,'').trim();
   return {md:head+'\n\n'+(raw||'(아직 받아쓴 글이 없습니다)'),fold:'',foldTitle:'',raw:true};}
@@ -39117,6 +39117,11 @@ function tbSplitRec(md){
     if(iF>=0)o.full=body.slice(iF,end(iF,iG)).replace(/^\n?###\s*정리본 \(녹취 순서\)[^\n]*\n?/,'').trim();
     if(iG>=0){o.segs=body.slice(iG).replace(/^\n?###[^\n]*\n?/,'').trim();o.segsTitle=/번역 · 원문/.test(body.slice(iG,iG+30))?'조각별 번역·원문':'조각별 정리본';}
   });
+  /* v10.81(hong): 받아쓰기 원본 탭 = 실시간 통역 원문 스크립트(없으면 녹음을 받아쓴 글). 나머지(번역 자막·다시 받아쓴 녹취·요점)는 접어 둔다 */
+  const pick=re=>o.raw.findIndex(c=>re.test(c)&&c.replace(/^[^\n]*\n?/,'').replace(/^>.*$/gm,'').trim()&&!/^\(없음\)$/.test(c.replace(/^[^\n]*\n?/,'').trim()));
+  let mi=pick(/^##\s*실시간 원문/);if(mi<0)mi=pick(/^##\s*녹취/);if(mi<0)mi=o.raw.length?0:-1;
+  o.rawMain=mi<0?'':o.raw[mi].replace(/^##\s*실시간 원문[^\n]*\n?/,'### 실시간 통역 원문 스크립트\n');
+  o.rawRest=o.raw.filter((c,i)=>i!==mi).join('\n\n');
   o.raw=o.raw.join('\n\n');return o;
 }
 /* v10.71: Word로 따로 내보낼 세 부분 — 요약본(회의록) · 조각별 정리본 · 받아쓰기 원본 */
@@ -39125,11 +39130,12 @@ function tbDocParts(rec){
   const x=tbSplitRec(String(rec.md||'').replace(/^>\s*⏳.*$/gm,''));
   const mt=/^\*\*([^*\n]+)\*\*(?:\s*—\s*([^\n]+))?\n/.exec(x.sum);   /* 요약본 머리의 제목·부제 */
   const sum=mt?x.sum.slice(mt[0].length).trim():x.sum;
-  const raw=x.raw.replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
+  const raw=(x.rawMain||x.raw).replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
   const doc=(t,sub,b)=>'# '+t+'\n'+(sub?'**'+sub+'**\n\n':'')+'> '+when+'\n\n'+b;
   return {
     raw:raw?doc(title+' — 받아쓰기 원본','',raw):'',
-    full:x.full?doc((mt?mt[1]:title)+' — 정리본',mt&&mt[2]?mt[2].trim():'',x.full):'',
+    full:x.segs?doc(title+' — 정리본','',x.segs):'',   /* v10.81: 정리본 = 스크립트를 검토해 다듬은 글(요약·개조식 아님) */
+    detail:x.full?doc((mt?mt[1]:title)+' — 요약본 (자세히, 녹취 순서)',mt&&mt[2]?mt[2].trim():'',x.full):'',
     sum:sum?doc(mt?mt[1]:title,mt&&mt[2]?mt[2].trim():'',sum+(x.memo?'\n\n'+x.memo:'')):'',
     segs:x.segs?doc(title+' — '+x.segsTitle,'',x.segs):'',segsTitle:x.segsTitle};
 }
@@ -39224,7 +39230,7 @@ function TbExportDlg({rec,recs,onClose,toast,upd}){
       <div style={{fontWeight:700,fontSize:16,marginBottom:4}}>📅 일정으로 내보내기{many?' · '+list.length+'개 기록':''}</div>
       <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginBottom:10,lineHeight:1.5}}>
         {many?<>기록마다 글상자 하나씩 들어갑니다(요약본은 펼치고 정리본은 접어서). 같은 기록을 다시 보내면 그 상자만 바꿉니다.{raws?' 아직 정리 전인 '+raws+'개는 받아쓴 글이 들어갑니다.':''}</>
-          :p.raw?'아직 정리 전이라 받아쓴 글을 넣습니다. 정리를 마친 뒤 다시 내보내면 정리본으로 바뀝니다.':(/녹취 순서/.test(p.foldTitle)?'요약본을 넣고, 정리본(녹취 순서)과 조각별 정리는 접어서 함께 넣습니다.':'회의록(개요·주제별 정리)을 넣고, 조각별 '+(p.foldTitle.startsWith('정리본')?'정리본':'번역·원문')+'은 접어서 함께 넣습니다.')}</div>
+          :p.raw?'아직 정리 전이라 받아쓴 글을 넣습니다. 정리를 마친 뒤 다시 내보내면 정리본으로 바뀝니다.':(/녹취 순서/.test(p.foldTitle)?'요약본을 넣고, 요약본 자세히(녹취 순서)와 정리본은 접어서 함께 넣습니다.':'회의록(개요·주제별 정리)을 넣고, 조각별 '+(p.foldTitle.startsWith('정리본')?'정리본':'번역·원문')+'은 접어서 함께 넣습니다.')}</div>
       {many&&<button type="button" disabled={busy||!evs} onClick={goEach} style={{...row,marginBottom:10,background:'var(--surface-active)'}}>
         <span style={{flex:1}}><b>각자 날짜의 일정으로</b><br/><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>연결된 일정 → 녹음 시간과 겹치는 그날 일정 → 없으면 새 일정</span></span></button>}
       {many&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',marginBottom:6}}>또는 한 일정에 모두 넣기</div>}
@@ -39515,22 +39521,24 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
           style={{...inputStyle,border:'none',borderRadius:0,minHeight:mobile?'60vh':'calc(100vh - 330px)',padding:'12px 14px',lineHeight:1.75,fontSize:13.5,resize:'vertical'}}/>
         :<div style={{padding:'12px 16px',overflowY:'auto',maxHeight:mobile?'none':'calc(100vh - 300px)'}}>{(()=>{
           const x=tbSplitRec(shown);if(!x.has)return <Markdown md={shown}/>;
-          const has={raw:!!x.raw,full:!!(x.full||x.segs),sum:!!(x.sum||x.memo)};
+          const has={raw:!!x.raw,full:!!(x.segs||x.full),sum:!!(x.sum||x.full||x.memo)};
           const tab=recTab&&has[recTab]?recTab:has.sum?'sum':has.full?'full':'raw';
           const T=[['raw','받아쓰기 원본'],['full','정리본'],['sum','요약본']];
           const pre=x.pre?x.pre+'\n\n':'';
+          const fbtn={margin:'14px 0 8px',padding:'6px 10px',border:'1px solid var(--border-default)',borderRadius:6,background:'#fff',cursor:'pointer',fontSize:'var(--fs-sm2)'};
           return <>{x.head&&<Markdown md={x.head}/>}
             <div style={{display:'flex',gap:0,borderBottom:'1px solid var(--border-default)',margin:'4px 0 12px',position:'sticky',top:-12,background:'#fff',zIndex:1}}>
-              {T.map(([k,l])=><button key={k} type="button" disabled={!has[k]} onClick={()=>setRecTab(k)}
+              {T.map(([k,l])=><button key={k} type="button" disabled={!has[k]} onClick={()=>{setRecTab(k);setSegOpen(false);}}
                 style={{padding:'8px 16px',border:'none',borderBottom:tab===k?'2px solid var(--text-body)':'2px solid transparent',background:'none',cursor:has[k]?'pointer':'default',
                   fontWeight:tab===k?700:400,color:has[k]?'var(--text-body)':'var(--text-label)',fontSize:'var(--fs-md2)',fontFamily:'var(--font-sans)'}}>{l}</button>)}</div>
-            {tab==='raw'&&<Markdown md={x.raw}/>}
-            {tab==='sum'&&<Markdown md={pre+(x.sum||'')+(x.memo?'\n\n'+x.memo:'')}/>}
-            {tab==='full'&&<>{<Markdown md={pre+(x.full||'')}/>}
-              {x.segs&&(x.full
-                ?<><button type="button" onClick={()=>setSegOpen(!segOpen)} style={{margin:'14px 0 8px',padding:'6px 10px',border:'1px solid var(--border-default)',borderRadius:6,background:'#fff',cursor:'pointer',fontSize:'var(--fs-sm2)'}}>{segOpen?'▾':'▸'} {x.segsTitle} {segOpen?'접기':'보기'}</button>
-                  {segOpen&&<Markdown md={x.segs}/>}</>
-                :<Markdown md={'### '+x.segsTitle+'\n'+x.segs}/>)}</>}
+            {/* v10.81(hong): 원본 = 실시간 원문 스크립트 · 정리본 = 스크립트 검토 글(조각별) · 요약본 = 소제목+개조식(자세한 판은 접어서) */}
+            {tab==='raw'&&<><Markdown md={x.rawMain||x.raw}/>
+              {x.rawMain&&x.rawRest&&<><button type="button" onClick={()=>setSegOpen(!segOpen)} style={fbtn}>{segOpen?'▾':'▸'} 다른 기록(번역 자막·다시 받아쓴 녹취 등) {segOpen?'접기':'보기'}</button>
+                {segOpen&&<Markdown md={x.rawRest}/>}</>}</>}
+            {tab==='sum'&&<><Markdown md={pre+(x.sum||x.full||'')+(x.memo?'\n\n'+x.memo:'')}/>
+              {x.sum&&x.full&&<><button type="button" onClick={()=>setSegOpen(!segOpen)} style={fbtn}>{segOpen?'▾':'▸'} 요약본 자세히 (녹취 순서) {segOpen?'접기':'보기'}</button>
+                {segOpen&&<Markdown md={x.full}/>}</>}</>}
+            {tab==='full'&&<Markdown md={pre+(x.segs||x.full||'')}/>}
           </>;})()}</div>}
     </div>;
 
@@ -39552,10 +39560,10 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         const sub={display:'block',fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:2};
         const it=(k,t,d)=><button key={k} type="button" style={{...row,opacity:k==='all'||p[k]?1:.5}} disabled={k!=='all'&&!p[k]} onClick={()=>exportDocx(k)}><b>{t}</b><span style={sub}>{k==='all'||p[k]?d:'이 기록에는 아직 없습니다'}</span></button>;
         return <Modal open onClose={()=>setDocOpen(false)} title="📄 Word로 내려받기" width={420}>
-          {it('raw','1. 받아쓰기 원본','기계가 받아쓴 글 그대로(녹음·시각별)')}
-          {it('full','2. 정리본','녹취 순서대로 빠짐없이 정리한 회의록(문서 수준)')}
-          {it('sum','3. 요약본','보고용 — 회의록 머리 · 큰 절별 핵심 · 시사점')}
-          {it('segs','4. '+(p.segsTitle||'조각별 정리'),'2분 30초 조각마다 정리'+(/번역/.test(p.segsTitle)?'한 번역과 원문':'한 글'))}
+          {it('raw','1. 받아쓰기 원본','실시간 통역 원문 스크립트(없으면 녹음을 받아쓴 글)')}
+          {it('full','2. 정리본','스크립트를 검토해 다듬은 글 — 요약·개조식 없이'+(/번역/.test(p.segsTitle||'')?' (번역과 원문)':''))}
+          {it('sum','3. 요약본','순서대로 소제목 + 개조식 — 회의록 머리 · 시사점')}
+          {it('detail','4. 요약본 (자세히)','녹취 순서대로 빠짐없이 소제목·개조식으로 정리한 긴 판')}
           {it('all','전체 한 파일','모두 한 문서로')}
         </Modal>;})()}
       {tidyOpen&&cur&&(()=>{   /* v10.65: 끊긴 기록을 처음부터 다시 돌리지 않도록, 어디부터 할지 고른다 */
