@@ -38425,19 +38425,34 @@ function parsePolished(md,any){   /* any: 끝난 기록의 조각도 읽는다(�
   const i=sec.search(/###\s*(?:번역 · 원문|정리본) \(조각별\)/);if(i<0)return null;
   const blocks=sec.slice(i).split(/\n(?=#### )/).slice(1);
   const segs=[];
+  /* v10.80: 조각 하나가 틀에 안 맞아도(원문이 비어 「>」만 남음, 번역 글 안의 「####」 소제목 등) 뒤 조각을 버리지 않는다 —
+     예전에는 거기서 멈춰, 「요약본만 다시」가 그 뒤 조각을 모두 지운 채로 다시 썼다(hong 2026-10-24) */
+  const rawSec=(tbSection(md,'녹취')||tbSection(md,'실시간 원문')).replace(/^>.*$/gm,'');
+  const known=new Set(parseSegs(rawSec).map(x=>x.label).filter(Boolean));   /* 받아쓴 글의 조각 머리 = 진짜 조각 경계 */
+  const isLabel=t=>known.has(t.trim())||/^\s*(녹음\d|\d{1,2}:\d{2}|\d+:\d{2}:\d{2})|·\s*\d{1,2}:\d{2}|\(이어서\)\s*$/.test(t);
   for(const b of blocks){
-    const m=/^#### ([^\n]*)\n([\s\S]*)$/.exec(b);if(!m)return null;
-    const body=m[2].trim();
-    if(kor){if(!body)break;segs.push({label:m[1],orig:'',ko:body});continue;}
-    const k=body.search(/\n\n> /);if(k<0)break;
-    const ko=body.slice(0,k).trim(),orig=body.slice(k).trim().split('\n').map(l=>l.replace(/^>\s?/,'')).join('\n').trim();
-    if(!ko||/^\(이 부분 번역 실패/.test(ko))break;
+    const m=/^#### ([^\n]*)\n?([\s\S]*)$/.exec(b);if(!m)continue;
+    const body=m[2].trim();const last=segs[segs.length-1];
+    if(last&&!isLabel(m[1])){   /* 시각 머리가 아닌 「####」 — 앞 조각 글의 일부 */
+      if(kor)last.ko+='\n\n#### '+m[1]+(body?'\n'+body:'');
+      else{const k=body.search(/(^|\n\n)>(\s|$)/);last.ko+='\n\n#### '+m[1]+(body?'\n'+(k<0?body:body.slice(0,k).trim()):'');
+        if(k>=0){const o=body.slice(k).trim().split('\n').map(l=>l.replace(/^>\s?/,'')).join('\n').trim();if(o)last.orig=(last.orig?last.orig+'\n':'')+o;}}
+      continue;}
+    if(kor){if(!body){if(!any)break;continue;}segs.push({label:m[1],orig:'',ko:body});continue;}
+    const k=body.search(/(^|\n\n)>(\s|$)/);   /* 원문 인용 시작 — 원문이 비면 「>」 한 글자만 남는다 */
+    const ko=(k<0?body:body.slice(0,k)).trim(),orig=k<0?'':body.slice(k).trim().split('\n').map(l=>l.replace(/^>\s?/,'')).join('\n').trim();
+    if(!ko||/^\(이 부분 번역 실패/.test(ko)){if(!any)break;if(ko||orig)segs.push({label:m[1],orig,ko:ko||'(번역 없음)',failed:true});continue;}
     segs.push({label:m[1],orig,ko});
   }
   const fx={topic:((/^>\s*분야:\s*(.*?)\s*$/m.exec(sec)||[])[1]||'').trim(),
     fixes:(((/^>\s*바로잡은 낱말:\s*(.*?)\s*$/m.exec(sec)||[])[1]||'').split(' · ').map(x=>x.split('→')).filter(x=>x.length===2).map(([wrong,right])=>({wrong:wrong.trim(),right:right.trim()})))};
   return segs.length?{korean:kor,segs,fx,done:/###\s*(개요|요약본)/.test(sec)}:null;
 }
+/* v10.80: 요약본만 다시 만들 때 조각별 부분은 원래 글 그대로 둔다(다시 써서 잃는 일이 없게) */
+function tbKeepSegs(md,oldMd){
+  const re=/\n###\s*(?:번역 · 원문|정리본) \(조각별\)[^\n]*\n[\s\S]*?(?=\n##\s|$)/;
+  const o=re.exec(oldMd);if(!o)return md;const n=re.exec(md);if(!n)return md;
+  return md.slice(0,n.index)+o[0]+md.slice(n.index+n[0].length);}
 /* 정리 절 본문: (회의록 머리) + 조각별 「시각 · 번역 / 원문(인용)」 */
 function segsMd({korean,fx,segs,mm,progress}){
   const head=mm?minutesMd(fx,mm):(progress||'> ⏳ 조각별로 정리하는 중 — 다 끝나면 개요·주제별 정리가 여기 붙습니다');
@@ -38492,7 +38507,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.79';
+const TB_VERSION='v10.80';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39368,7 +39383,8 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
     try{
       const mm=await meetingMinutes(pre.segs.map(x=>x.ko).join('\n\n'),{topic:pre.fx.topic,onStep:m=>setBusy(m+' ('+pm+')'),segs:pre.segs,date:tbKoDate(rec.created)});
       TB.log('정리·번역',0,1,Store.cfg.claudeModel||'');
-      const fin={...rec,md:putPolish(rec.md,{korean:pre.korean,fx:pre.fx,segs:pre.segs,mm},pm,pre.segs.length)};upd(rec.id,{md:fin.md});
+      const cur2=rec;
+      const fin={...cur2,md:tbKeepSegs(putPolish(cur2.md,{korean:pre.korean,fx:pre.fx,segs:pre.segs,mm},pm,pre.segs.length),cur2.md)};upd(rec.id,{md:fin.md});
       toast('요약본(회의록)을 다시 만들었습니다');
       await tbAutoCal(fin,toast,upd).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message));
     }catch(e){toast('⚠ 개요·주제별 정리 실패 — '+e.message);}
