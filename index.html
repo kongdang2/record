@@ -38492,7 +38492,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.78';
+const TB_VERSION='v10.79';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39121,9 +39121,20 @@ function tbDocParts(rec){
 function tbToEvent(ev,rec){
   const p=tbExportParts(rec);const src='tbrec:'+rec.id;
   const b=ev.board&&Array.isArray(ev.board.items)?ev.board:{items:[]};const old=b.items.find(i=>i.src===src);
-  const item={id:old?old.id:uid(),type:'text',x:old?old.x:20,y:old?old.y:100000,w:old?old.w:680,z:0,src,md:p.md,fold:p.fold,foldTitle:p.foldTitle,
-    ...(old?{}:{stk:'s'+Date.now().toString(36),ord:0})};
-  return {...ev,board:{...b,items:old?b.items.map(i=>i.src===src?item:i):[...b.items,item]}};}
+  const n=b.items.length;
+  const item={id:old?old.id:uid(),type:'text',x:old?old.x:20,y:old?old.y:100000+n,w:old?old.w:680,z:0,src,md:p.md,fold:p.fold,foldTitle:p.foldTitle,at:tbRecStart(rec),
+    ...(old?{stk:old.stk,ord:old.ord}:{stk:'s'+Date.now().toString(36)+n,ord:0})};
+  return {...ev,category:ev.category||TB_CAL_CAT,board:tbSortBoxes({...b,items:old?b.items.map(i=>i.src===src?item:i):[...b.items,item]})};}
+const TB_CAL_CAT='통번역';   /* v10.79: 보낸 일정의 카테고리(hong) — 새 일정과 카테고리가 비어 있던 일정에만, 이미 정해 둔 카테고리는 그대로 */
+/* v10.79: 녹음 시작 시각(ms) — 통역 기록은 멈출 때 만들어지므로 created − 녹음 길이, 올린 파일은 올린 때 */
+function tbRecStart(rec){const t=new Date(rec.created||Date.now()).getTime();
+  const secs=rec.live&&Array.isArray(rec.live.secs)?rec.live.secs.reduce((a,x)=>a+(+x||0),0):0;return t-secs*1000;}
+/* v10.79: 한 일정에 기록 상자가 여럿이면 녹음 시간 순서로 위에서부터 — 상자 자리(x·y·폭·묶음)는 그대로 두고 내용만 시간 순서로 바꿔 앉힌다 */
+function tbSortBoxes(b){
+  const box=b.items.filter(i=>/^tbrec:/.test(i.src||'')&&i.at!=null);if(box.length<2)return b;
+  const slots=[...box].sort((a,c)=>(a.y-c.y)||((a.ord||0)-(c.ord||0))).map(i=>({x:i.x,y:i.y,w:i.w,stk:i.stk,ord:i.ord}));
+  const byT=[...box].sort((a,c)=>a.at-c.at);const put=new Map(byT.map((i,k)=>[i.id,{...i,...slots[k]}]));
+  return {...b,items:b.items.map(i=>put.get(i.id)||i)};}
 /* 일정앱에서 연결해 온 기록(rec.cal) → 그 일정에 바로 넣는다(날짜·일정 고르기 없음). 일정이 지워졌으면 오류 */
 async function tbCalExport(rec,toast){
   const c=rec.cal;if(!c||!c.ev)return false;
@@ -39139,7 +39150,7 @@ function tbRecSpan(rec){   /* 녹음 시작·끝(그날 분) — 통역 기록�
   const secs=rec.live&&Array.isArray(rec.live.secs)?rec.live.secs.reduce((n,x)=>n+(+x||0),0):0;
   return {day:localDay(rec.created),s:Math.max(0,end-Math.round(secs/60)),e:end};}
 function tbNewEvent(rec,day){const sp=tbRecSpan(rec);const same=sp.day===day;const hm=m=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
-  return {id:uid(),title:rec.title||'회의',date:day,dateEnd:'',start:same?hm(sp.s):'',end:same&&sp.e>sp.s?hm(sp.e):'',cal:'work',status:'todo',category:'',repeat:'none',notes:'',board:{items:[],merged:true}};}
+  return {id:uid(),title:rec.title||'회의',date:day,dateEnd:'',start:same?hm(sp.s):'',end:same&&sp.e>sp.s?hm(sp.e):'',cal:'work',status:'todo',category:TB_CAL_CAT,repeat:'none',notes:'',board:{items:[],merged:true}};}
 function tbFindEvent(evs,rec){
   const src='tbrec:'+rec.id;const had=evs.find(e=>e&&(e.board&&e.board.items||[]).some(i=>i.src===src));if(had)return had;
   const sp=tbRecSpan(rec);
@@ -39150,7 +39161,7 @@ async function tbAutoCal(rec,toast,upd,opt){
   opt=opt||{};
   if(rec.cal&&rec.cal.ev)return tbCalExport(rec,toast);
   if(Store.mode!=='supabase')return false;
-  if(!opt.force&&(Store.cfg.tbAutoCal===false||!rec.live))return false;   /* 자동은 통역·대화 기록만(올린 파일은 날짜가 회의 날과 다를 수 있다) */
+  if(!opt.force&&Store.cfg.tbAutoCal===false)return false;   /* v10.79: 올린 음성 파일도 자동 — 날짜는 올린 날(hong) */
   const evs=opt.evs||await CAL.list();
   let ev=tbFindEvent(evs,rec);const isNew=!ev;if(!ev){ev=tbNewEvent(rec,localDay(rec.created));evs.push(ev);}
   const out=tbToEvent(ev,rec);await CAL.save(out);
@@ -39163,15 +39174,18 @@ function TbExportDlg({rec,recs,onClose,toast,upd}){
   const list=recs&&recs.length?recs:[rec];const many=list.length>1;rec=list[0];   /* v10.78: 여러 기록을 한 번에 */
   const [day,setDay]=React.useState(()=>localDay(rec.created));const [evs,setEvs]=React.useState(null);const [err,setErr]=React.useState('');const [busy,setBusy]=React.useState(false);
   const [auto,setAuto]=React.useState(Store.cfg.tbAutoCal!==false);
+  const [ttl,setTtl]=React.useState(rec.title||'회의');   /* v10.79: 보낼 때 제목 바꾸기 — 한 건이면 기록 제목(상자 머리)과 새 일정 제목, 여러 건이면 새 일정 제목 */
   React.useEffect(()=>{CAL.list().then(setEvs).catch(e=>setErr(e.message));},[]);
   React.useEffect(()=>{const k=x=>{if(x.key==='Escape'){x.stopPropagation();onClose();}};window.addEventListener('keydown',k,true);return()=>window.removeEventListener('keydown',k,true);},[]);
   const onDay=(evs||[]).filter(e=>e&&(e.repeat||'none')==='none'&&(e.date===day||(e.dateEnd&&e.date<=day&&day<=e.dateEnd))).sort((a,b)=>String(a.start||'').localeCompare(String(b.start||'')));
   const p=tbExportParts(rec);const raws=list.filter(r=>tbExportParts(r).raw).length;
   const link=(r,ev)=>{if(upd)upd(r.id,{cal:{ev:ev.id,date:ev.date,title:ev.title}});};   /* 다음에 다시 정리하면 이 일정에 바꿔 넣도록 기억 */
   const go=async ev=>{setBusy(true);setErr('');
-    try{const isNew=!ev;let base=ev||(many?{...tbNewEvent(rec,day),title:rec.title||'회의',start:'',end:''}:tbNewEvent(rec,day));
+    try{const t=ttl.trim()||rec.title||'회의';
+      if(!many&&t!==(rec.title||'')){if(upd)upd(rec.id,{title:t});list[0]={...rec,title:t};}
+      const isNew=!ev;let base=ev||(many?{...tbNewEvent(rec,day),title:t,start:'',end:''}:{...tbNewEvent(list[0],day),title:t});
       const had=!isNew&&list.some(r=>(base.board&&base.board.items||[]).some(i=>i.src==='tbrec:'+r.id));
-      for(const r of list)base=tbToEvent(base,r);   /* 기록마다 글상자 하나 — 같은 기록은 그 상자만 바꾼다 */
+      for(const r of [...list].sort((a,c)=>tbRecStart(a)-tbRecStart(c)))base=tbToEvent(base,r);   /* 기록마다 글상자 하나(녹음 시간 순서) — 같은 기록은 그 상자만 바꾼다 */
       await CAL.save(base);list.forEach(r=>link(r,base));
       /* 옮기기 — 전에 연결된 다른 일정에 들어 있던 이 기록의 글상자는 뺀다(같은 내용이 두 곳에 남지 않게) */
       let moved=0;const olds=[...new Set(list.filter(r=>r.cal&&r.cal.ev&&r.cal.ev!==base.id).map(r=>r.cal.ev))];
@@ -39199,6 +39213,8 @@ function TbExportDlg({rec,recs,onClose,toast,upd}){
       {many&&<button type="button" disabled={busy||!evs} onClick={goEach} style={{...row,marginBottom:10,background:'var(--surface-active)'}}>
         <span style={{flex:1}}><b>각자 날짜의 일정으로</b><br/><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>연결된 일정 → 녹음 시간과 겹치는 그날 일정 → 없으면 새 일정</span></span></button>}
       {many&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)',marginBottom:6}}>또는 한 일정에 모두 넣기</div>}
+      <label style={{display:'flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)',marginBottom:8}}>{many?'새 일정 제목':'제목'}
+        <input value={ttl} onChange={x=>setTtl(x.target.value)} aria-label="보낼 제목" style={{...inputStyle,flex:1,padding:'4px 6px'}}/></label>
       <label style={{display:'flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)',marginBottom:10}}>날짜
         <input type="date" value={day} onChange={x=>setDay(x.target.value)} style={{...inputStyle,width:'auto',padding:'4px 6px'}}/></label>
       {!evs&&!err&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)'}}>일정 불러오는 중…</div>}
@@ -39209,11 +39225,11 @@ function TbExportDlg({rec,recs,onClose,toast,upd}){
             <span style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontWeight:600}}>{e.title||'(제목 없음)'}</span>
             {had&&<span style={{fontSize:11,color:'var(--text-muted)'}}>넣은 적 있음 · 바꾸기</span>}</button>;})}
         {!onDay.length&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-label)'}}>이 날짜에 일정이 없습니다(반복 일정은 목록에 나오지 않습니다).</div>}
-        <button type="button" disabled={busy} onClick={()=>go(null)} style={{...row,borderStyle:'dashed'}}>＋ 새 일정 만들기 · 『{rec.title||'회의'}』</button>
+        <button type="button" disabled={busy} onClick={()=>go(null)} style={{...row,borderStyle:'dashed'}}>＋ 새 일정 만들기 · 『{ttl.trim()||rec.title||'회의'}』</button>
       </div>}
       <label style={{display:'flex',alignItems:'flex-start',gap:6,fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:12,lineHeight:1.5,cursor:'pointer'}}>
         <input type="checkbox" checked={auto} onChange={x=>{setAuto(x.target.checked);Store.saveCfg({tbAutoCal:x.target.checked});}} style={{marginTop:3}}/>
-        <span>통역·대화를 끝내고 정리(요약본까지)가 끝나면 일정에 자동으로 넣기 — 다시 정리하면 같은 일정에 바꿔 넣습니다</span></label>
+        <span>정리(요약본까지)가 끝나면 일정에 자동으로 넣기 — 통역·대화는 녹음한 날, 올린 음성 파일은 올린 날. 다시 정리하면 같은 일정에 바꿔 넣습니다</span></label>
       {err&&<div style={{color:'var(--color-danger)',fontSize:'var(--fs-sm2)',marginTop:8}}>⚠ {err}</div>}
       <div style={{display:'flex',justifyContent:'flex-end',marginTop:10}}><Button variant="ghost" size="sm" onClick={onClose}>{busy?'넣는 중…':'닫기'}</Button></div>
     </div></div>,document.body);
