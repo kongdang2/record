@@ -35641,6 +35641,7 @@ __ds_ns.DataTable = __ds_scope.DataTable;
 </script>
 <script src="pms.config.js"></script>
 <style id="pms-responsive">
+.tbSwipe::-webkit-scrollbar{display:none}
 /* 폰: 모달·카드가 화면을 넘지 않게 */
 @media (max-width:860px){
   /* v10.93: 휴대폰 글자를 한 단계 크게, 입력칸은 16px(아이폰이 확대하지 않게) */
@@ -37505,6 +37506,12 @@ class LiveSession{
 /* 화면을 옮겨도(번역/정리 확인 등) 통역이 끊기지 않도록 세션은 화면 밖에 둔다 */
 const LIVE={sess:null,saved:null,cal:TB_LINK&&TB_LINK.ev?TB_LINK:null};   /* cal: 일정앱에서 연결해 온 일정 — 녹취가 끝나면 거기에 넣는다 */
 
+/* v10.96: 휴대폰 — 시작·정지 단추를 아래 탭 바로 위에 크게 한 줄로 고정 */
+function MobRunBar({children,h}){
+  return <><div style={{height:h||72}}/><div style={{position:'fixed',left:0,right:0,bottom:'calc(58px + env(safe-area-inset-bottom, 0px))',zIndex:35,display:'grid',gap:8,
+    padding:'8px max(12px, env(safe-area-inset-left, 0px)) 8px max(12px, env(safe-area-inset-right, 0px))',background:'rgba(255,255,255,.97)',borderTop:'1px solid var(--border-default)'}}>{children}</div></>;
+}
+const mobRunStyle={width:'100%',minHeight:50,fontSize:17,borderRadius:12,justifyContent:'center'};
 function LiveView({db,setDb,toast,onOpenNote,owner}){
   const {Card,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const mobile=useMobile();
@@ -37516,7 +37523,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
   const [showZh,setShowZh]=React.useState(!!Store.cfg.liveShowZh);
   const left='pv';   /* v10.90: 왼쪽은 항상 동시통역(선택 없앰) */   /* 동시통역 칸 원문 보기(v10.55) */
   const [devs,setDevs]=React.useState([]);const [adv,setAdv]=React.useState(false);const [saving,setSaving]=React.useState('');
-  const [optOpen,setOptOpen]=React.useState(false);const [pane,setPane]=React.useState('sub');   /* v10.93: 옵션은 접어 두고, 휴대폰은 자막/요점을 바꿔 본다 */
+  const [optOpen,setOptOpen]=React.useState(false);const [pane,setPane]=React.useState('sub');const swipe=React.useRef(null);   /* v10.93: 옵션은 접어 두고, 휴대폰은 자막/요점을 바꿔 본다 */
   const box=React.useRef(null);const stick=React.useRef(true);const box2=React.useRef(null);const stick2=React.useRef(true);const box3=React.useRef(null);const stick3=React.useRef(true);
   const sess=LIVE.sess;const running=!!(sess&&sess.running);
   React.useEffect(()=>{if(LIVE.sess)LIVE.sess.onChange=force;return()=>{if(LIVE.sess)LIVE.sess.onChange=null;};},[sess]);
@@ -37582,16 +37589,14 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
   const runBtn=running
       ?<Button variant="danger" onClick={stop}>■ 정지</Button>
       :<span style={{display:'inline-flex',gap:6}}><Button onClick={()=>start()} disabled={!!saving}>● {sess?'새로 시작':'시작'}</Button>
-        {owner&&<><Button variant="gray" disabled={!!saving} onClick={()=>fileIn.current&&fileIn.current.click()} title="관리자 시험용 — 마이크 대신 녹음 파일을 실제 속도로 넣어 같은 소리로 방식을 비교합니다(비용은 실제 통역과 같음)">📂 파일로 시험</Button></>}
-        {sess&&!saving&&!saved&&<Button variant="ghost" onClick={reset} title="화면의 자막을 지웁니다(저장된 기록은 그대로)">화면 비우기</Button>}</span>;   /* v10.43: 저장 띠가 없어도 비울 수 있게 */
+        {owner&&<><Button variant="gray" disabled={!!saving} onClick={()=>fileIn.current&&fileIn.current.click()} title="관리자 시험용 — 마이크 대신 녹음 파일을 실제 속도로 넣어 같은 소리로 방식을 비교합니다(비용은 실제 통역과 같음)">📂 파일로 시험</Button></>}</span>;   /* v10.96: 대기 중 「화면 비우기」는 뺐다 — 멈추면 저장 띠에 있다 */
   const main=<Card title="🗣 통역" badge={<Badge tone="muted">{status}</Badge>}
     toolbar={mobile?null:runBtn}
     toolbarRight={<span style={{display:'inline-flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)'}}>
       <span title="입력 소리 크기 — 말할 때 막대가 움직여야 합니다" style={{width:70,height:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-default)',borderRadius:4,overflow:'hidden'}}>
         <span style={{display:'block',height:'100%',width:(lvl*100)+'%',background:lvl>0.9?'var(--color-danger)':'#16a34a',transition:'width .1s'}}/></span>
       <span style={{fontFamily:'var(--font-num)'}}>{mmss(secs)}{sess&&sess.opt.file&&sess.fileLen?' / '+mmss(Math.round(sess.fileLen))+' 📂':''}</span>
-      {sess&&sess.opt.record!==false&&running&&<span style={{color:'var(--color-danger)'}}>● 녹음</span>}
-      {mobile&&running&&runBtn}</span>}>
+      {sess&&sess.opt.record!==false&&running&&<span style={{color:'var(--color-danger)'}}>● 녹음</span>}</span>}>
     {owner&&<input id="tbLiveFileIn" ref={fileIn} type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.ogg" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(f)start(f);}}/>}
     {!running&&<>
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6}}>
@@ -37601,18 +37606,15 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       {devs.length>1&&<select style={{...sel,maxWidth:190}} disabled={running} value={opt.device} onChange={e=>set({device:e.target.value})}>
         <option value="">기본 마이크</option>{devs.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'마이크'}</option>)}</select>}
     </div>
-    {mobile&&<div style={{display:'grid',gap:6,margin:'4px 0 8px'}}>
-      <Button onClick={()=>start()} disabled={!!saving} style={{width:'100%',minHeight:50,fontSize:17,borderRadius:12}}>● {sess?'새로 시작':'통역 시작'}</Button>
-      {sess&&!saving&&!saved&&<div style={{display:'flex',gap:6,justifyContent:'center'}}>   {/* v10.94: 휴대폰에는 파일로 시험 없음 */}
-        {<Button variant="ghost" size="sm" onClick={reset}>화면 비우기</Button>}</div>}</div>}
     {/* v10.93: 모델·녹음 옵션은 접어 두고 한 줄 요약만 */}
     <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:'6px 14px',marginBottom:6,fontSize:'var(--fs-sm2)'}}>
       {/* v10.94: 녹음 저장은 중요하니 접지 않는다 */}
       <label style={{cursor:'pointer',fontWeight:600,color:'var(--text-body)',whiteSpace:'nowrap'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 회의록까지 만듭니다"><input type="checkbox" checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
       {opt.record&&<RecDirBtn disabled={running}/>}
-      <button type="button" onClick={()=>setOptOpen(v=>!v)} aria-expanded={optOpen} style={{border:'none',background:'none',padding:'2px 0',fontFamily:'inherit',fontSize:'var(--fs-sm2)',color:'var(--text-muted)',cursor:'pointer',textAlign:'left'}}>
-        ⚙ {modelName(opt.model)} <span style={{color:'var(--text-label)'}}>{optOpen?'▴ 접기':'▾ 모델'}</span></button></div>
-    {optOpen&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:8,display:'flex',flexWrap:'wrap',gap:'6px 12px',alignItems:'center',padding:'8px 10px',background:'var(--surface-calc-cell)',borderRadius:6}}>
+      {mobile&&opt.from!=='ko'&&<label style={{cursor:'pointer',whiteSpace:'nowrap',color:'var(--text-body)'}} title="자막 덩어리마다 받아쓴 원문을 작게 함께 보여 줍니다"><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label>}
+      {!mobile&&<button type="button" onClick={()=>setOptOpen(v=>!v)} aria-expanded={optOpen} style={{border:'none',background:'none',padding:'2px 0',fontFamily:'inherit',fontSize:'var(--fs-sm2)',color:'var(--text-muted)',cursor:'pointer',textAlign:'left'}}>
+        ⚙ {modelName(opt.model)} <span style={{color:'var(--text-label)'}}>{optOpen?'▴ 접기':'▾ 모델'}</span></button>}</div>
+    {optOpen&&!mobile&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:8,display:'flex',flexWrap:'wrap',gap:'6px 12px',alignItems:'center',padding:'8px 10px',background:'var(--surface-calc-cell)',borderRadius:6}}>
       <span style={{color:'var(--text-label)'}}>모델: {opt.mode==='live'?modelName(opt.model):modelName(opt.asrModel)+' + '+modelName(opt.trModel)+(opt.mode==='hyb'&&left!=='asr'?' · 동시통역 '+modelName(opt.model):'')}</span>
       {/* 고급(서버 주소) 메뉴는 없앴다 — 기본 주소(싱가포르)만 쓴다 */}
     </div>}
@@ -37629,7 +37631,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     {(()=>{
       const hyb=sess&&sess.opt.mode==='hyb';const isKo=sess&&sess.opt.from==='ko';const asrLeft=hyb&&!isKo&&left==='asr';const three=false;   /* v10.91: 3분할(v10.89)은 되돌렸다 — 좌 동시통역 · 우 개조식 */const liveSegs=hyb&&!asrLeft?sess.liveSegs:[];
       const boxStyle={overflowY:'auto',border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 12px',background:'#fff'};
-      const h=mobile?'calc(100vh - 360px)':'calc(100vh - 380px)';
+      const h=mobile?'calc(100vh - 360px)':'calc(100vh - 380px)';const mh=running?'calc(100vh - 360px)':'calc(100vh - 470px)';   /* v10.96: 아래 시작·정지 줄만큼 */
       const empty=<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>
         {running?'듣고 있습니다 — 말이 시작되면 몇 초 뒤 자막이 나옵니다':<>▶ <b>시작</b>을 누르고 마이크를 허용하세요<br/><span style={{fontSize:'var(--fs-sm)'}}>스피커 소리를 받을 때는 음량을 크게, 마이크 가까이</span></>}</div>;
       const segRow=(g,i,big)=><div key={i} style={{padding:'6px 0',borderBottom:'1px dashed var(--border-default)'}}>
@@ -37641,7 +37643,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
         :<div style={{fontSize:big?(mobile?17:19):'var(--fs-md)',lineHeight:1.6,color:'var(--text-body)'}}>{p.ko}</div>}
         {!p.bullets&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:3,lineHeight:1.5}}>{p.zh}</div>}</div>;
       const verified=<div ref={hyb?box2:box} onScroll={e=>{const el=e.currentTarget;(hyb?stick2:stick).current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}}
-        style={{...boxStyle,height:hyb&&mobile?'calc(100vh - 310px)':h,minHeight:hyb&&mobile?240:260}}>
+        style={{...boxStyle,height:hyb&&mobile?mh:h,minHeight:hyb&&mobile?240:260}}>
         {hyb?(()=>{const ol=sess.outline;const none=!ol.sections.length&&!ol.loose.length;const ul={margin:'4px 0 0',paddingLeft:18,fontSize:'var(--fs-md)',lineHeight:1.55,color:'var(--text-body)'};
           return <>
             {none&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:40,lineHeight:1.8,fontSize:'var(--fs-sm2)'}}>{isKo?(running?'정리 중 — 받아쓰기를 교정한 내용이 요점으로 쌓이고, 쌓이면 소제목으로 묶입니다':'받아쓰기를 교정한 내용의 개조식 정리'):(running?'정리 중 — 받아쓰기·번역으로 검증한 내용이 요점으로 쌓이고, 쌓이면 소제목으로 묶입니다':'받아쓰기+번역으로 검증한 내용의 개조식 정리')}</div>}
@@ -37665,7 +37667,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
                 {done?g.ko:<>{g.zh}<span style={{opacity:.6}}>{g.zhS}</span>{!g.zhS&&g.zh&&<span style={{fontSize:'var(--fs-sm2)'}}> · 번역 중…</span>}</>}</div>
               {done&&showZh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',margin:'2px 4px 6px'}}>{g.zh}</div>}</div>;})}
           </div>);};
-      const live=<div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?'calc(100vh - 310px)':h,minHeight:mobile?240:260}}>
+      const live=<div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?mh:h,minHeight:mobile?240:260}}>
         {asrLeft&&asrBody()}
         {!asrLeft&&!liveSegs.length&&(running?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>{sess.pvState||'듣고 있습니다 — 말이 시작되면 2~3초 뒤 자막이 나옵니다'}</div>:empty)}
         {(()=>{   /* 한국어 문장 한 줄씩, 4문장마다 한 덩어리. 마지막 문장은 연한 배경(지금 들어오는 말) */
@@ -37677,24 +37679,27 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
               {x.zh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',margin:'2px 4px 6px'}}>{x.zh}</div>}</div>;})}
           </div>);})()}
       </div>;
-      if(mobile){   /* v10.93: 휴대폰 — 자막/요점을 위에서 바꿔 본다 */
-        const segBtn=(id,l)=><button key={id} type="button" onClick={()=>setPane(id)} aria-pressed={pane===id} style={{flex:1,border:'none',borderRadius:6,padding:'7px 0',fontFamily:'inherit',fontSize:14,
+      if(mobile){   /* v10.93: 휴대폰 — 자막/요점을 위에서 바꿔 본다 · v10.96: 손가락으로 옆으로 넘겨도 바뀐다 */
+        const go=id=>{setPane(id);const el=swipe.current;if(el)el.scrollTo({left:id==='note'?el.scrollWidth:0,behavior:'smooth'});};
+        const segBtn=(id,l)=><button key={id} type="button" onClick={()=>go(id)} aria-pressed={pane===id} style={{flex:1,border:'none',borderRadius:6,padding:'7px 0',fontFamily:'inherit',fontSize:14,
           fontWeight:pane===id?700:500,background:pane===id?'var(--wb-ink, #1F2A37)':'transparent',color:pane===id?'#fff':'var(--text-muted)',cursor:'pointer'}}>{l}</button>;
         return <div>
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
             <div style={{flex:1,display:'flex',gap:2,padding:2,border:'1px solid var(--border-strong)',borderRadius:8}}>
-              {segBtn('sub',isKo?'⚡ 받아쓰기':'⚡ 자막')}{segBtn('note',isKo?'🎯 교정·정리':'🎯 요점')}</div>
-            {!isKo&&pane==='sub'&&<label style={{cursor:'pointer',fontSize:13,color:'var(--text-muted)',whiteSpace:'nowrap'}}><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label>}</div>
-          {pane==='sub'?live:verified}</div>;}
+              {segBtn('sub',isKo?'⚡ 받아쓰기':'⚡ 자막')}{segBtn('note',isKo?'🎯 교정·정리':'🎯 요점')}</div></div>
+          <div ref={swipe} className="tbSwipe" onScroll={e=>{const el=e.currentTarget;const p=el.scrollLeft>el.clientWidth/2?'note':'sub';if(p!==pane)setPane(p);}}
+            style={{display:'flex',gap:10,overflowX:'auto',scrollSnapType:'x mandatory',overscrollBehaviorX:'contain',scrollbarWidth:'none'}}>
+            <div style={{flex:'0 0 100%',minWidth:0,scrollSnapAlign:'start'}}>{live}</div>
+            <div style={{flex:'0 0 100%',minWidth:0,scrollSnapAlign:'start'}}>{verified}</div></div></div>;}
       return <div style={{display:'grid',gridTemplateColumns:mobile?'1fr':(three?'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)':'minmax(0,2fr) minmax(0,1fr)'),gap:10,alignItems:'start'}}>
         <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>{isKo?'⚡ 실시간 받아쓰기':'⚡ 동시통역'}</span>
           <span style={{display:'flex',gap:10}}>          {!isKo&&<label style={{cursor:'pointer'}} title="동시통역 덩어리마다 받아쓴 원문을 작게 함께 보여 줍니다"><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label>}</span></div>{live}</div>
         <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3}}>{isKo?'🎯 교정·정리':'🎯 검증·정리'}</div>{verified}</div>
       </div>;})()}
-    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-      <span>소리는 Alibaba(싱가포르)로{opt.mode!=='live'?(isQwen(opt.trModel)?', 받아쓴 글도 Alibaba(Qwen)로':', 받아쓴 글은 Anthropic(Claude)으로'):''} 전송됩니다 · 다른 메뉴로 옮겨도 통역은 계속됩니다</span>
-      {sess&&<span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}회 · 로그 보기(마우스 올리기)</span>}
-    </div>
+    {owner&&!mobile&&sess&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,textAlign:'right'}}>   {/* v10.96: 아래 설명 줄은 뺐다 — 관리자 PC에만 로그 */}
+      <span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}회 · 로그 보기(마우스 올리기)</span></div>}
+    {mobile&&<MobRunBar>{running?<Button variant="danger" onClick={stop} style={mobRunStyle}>■ 정지</Button>
+      :<Button onClick={()=>start()} disabled={!!saving} style={mobRunStyle}>● {sess?'새로 시작':'통역 시작'}</Button>}</MobRunBar>}
   </Card>;
   return main;   /* v10.53: 「최근 통역 기록」 패널은 뺐다 — 기록은 번역/정리 탭에서 */
 }
@@ -37948,7 +37953,7 @@ function ConvPane({segs,view,big,flip,boxRef,onScroll,height,empty}){
   </div>;
 }
 
-function ConvView({setDb,toast,onOpenNote}){
+function ConvView({setDb,toast,onOpenNote,owner}){
   const {Card,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const mobile=useMobile();
   const [,force]=React.useReducer(x=>x+1,0);
@@ -38033,20 +38038,21 @@ function ConvView({setDb,toast,onOpenNote}){
     <span style={{fontSize:12,opacity:.85}}>{themOn?theirs.holdSub+' · 상대 말 듣는 중':theirs.name+' · 상대 말 · 누르고 말하기'}</span></button>;
   const fixBar=mobile&&running;   /* v10.93: 휴대폰 — 단추를 아래 탭 바로 위에 고정(말풍선이 길어도 늘 보이게) */
   const pttBtn=running&&(fixBar?null:<div style={{display:'flex',gap:8,margin:'6px 0'}}>{pttThem}{pttMe}</div>);
-  const pttFixed=fixBar&&<><div style={{height:84}}/><div style={{position:'fixed',left:0,right:0,bottom:'calc(58px + env(safe-area-inset-bottom, 0px))',zIndex:35,display:'flex',gap:8,
-    padding:'8px max(12px, env(safe-area-inset-left, 0px)) 8px max(12px, env(safe-area-inset-right, 0px))',background:'rgba(255,255,255,.96)',borderTop:'1px solid var(--border-default)'}}>
-    {!face&&pttThem}{pttMe}</div></>;
+  /* v10.96: 휴대폰 — 아래 줄에 누르고 말하기 단추와 시작·정지 */
+  const pttFixed=mobile&&<MobRunBar h={running?140:72}>
+    {running&&<div style={{display:'flex',gap:8}}>{!face&&pttThem}{pttMe}</div>}
+    {running?<Button variant="danger" onClick={stop} style={{...mobRunStyle,minHeight:44,fontSize:16}}>■ 정지</Button>
+      :<Button variant="primary" onClick={start} disabled={!!saving} style={mobRunStyle}>▶ 대화 시작</Button>}</MobRunBar>;
   const tog=(k,label,title)=><label title={title} style={{cursor:'pointer',whiteSpace:'nowrap'}}><input type="checkbox" checked={!!opt[k]} onChange={e=>set({[k]:e.target.checked})}/> {label}</label>;
   const liveMode='⚡ 동시통역 ('+modelName(Store.cfg.liveModel||LIVE_MODELS[0].id)+')';
   /* 🎙 단추가 화면 안에 보이도록 말풍선 영역을 그만큼 낮춘다 */
-  const H=mobile?(running?'calc(100vh - 330px)':'calc(100vh - 400px)'):'calc(100vh - 420px)';
+  const H=mobile?(running?'calc(100vh - 390px)':'calc(100vh - 430px)'):'calc(100vh - 420px)';
   return <Card title="💬 대화" badge={<Badge tone="muted">{status}</Badge>}
     toolbar={mobile?null:runBtn}
     toolbarRight={<span style={{display:'inline-flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)'}}>
       <span title="입력 소리 크기" style={{width:60,height:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-default)',borderRadius:4,overflow:'hidden'}}>
         <span style={{display:'block',height:'100%',width:(lvl*100)+'%',background:sess&&sess.held?'#DC2626':lvl>0.9?'var(--color-danger)':'#16a34a',transition:'width .1s'}}/></span>
-      <span style={{fontFamily:'var(--font-num)'}}>{mmss(secs)}</span>
-      {mobile&&runBtn}</span>}>
+      <span style={{fontFamily:'var(--font-num)'}}>{mmss(secs)}</span></span>}>
     {!(mobile&&running)&&<>   {/* v10.93: 휴대폰에서 대화 중에는 옵션 줄을 숨기고 말풍선·단추만 */}
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6,fontSize:'var(--fs-sm2)'}}>
       <span>한국어 ↔</span>
@@ -38055,7 +38061,7 @@ function ConvView({setDb,toast,onOpenNote}){
         {CONV_LAYOUTS.map(m=><button key={m.id} type="button" onClick={()=>set({layout:m.id})} title={m.desc}
           style={{border:'none',borderRadius:4,padding:'4px 10px',fontSize:'var(--fs-sm2)',fontWeight:opt.layout===m.id?600:500,background:opt.layout===m.id?'var(--surface-active)':'transparent',
             color:opt.layout===m.id?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{m.label}</button>)}</span>
-      <span style={{color:'var(--text-label)'}} title="대화는 동시통역 모델로 받습니다(설정 화면의 동시통역 모델)">· 받기: {liveMode}</span>
+      {!mobile&&<span style={{color:'var(--text-label)'}} title="대화는 동시통역 모델로 받습니다(설정 화면의 동시통역 모델)">· 받기: {liveMode}</span>}
     </div>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6,display:'flex',flexWrap:'wrap',gap:'4px 12px',alignItems:'center'}}>
       {tog('speakThem','내 말 → '+theirs.label+' 음성','내 말을 번역해 상대 언어로 읽어 줍니다. 끄면 자막만')}
@@ -38090,10 +38096,8 @@ function ConvView({setDb,toast,onOpenNote}){
         {pttBtn}
       </div>}
     {pttFixed}
-    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-      <span>소리는 Alibaba(싱가포르)로, 받아쓴 글은 Anthropic(Claude)으로 전송됩니다 · 음성은 이 기기가 읽습니다</span>
-      {sess&&<span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}{sess.out?'+'+sess.out.n:''}회 · 로그</span>}
-    </div>
+    {owner&&!mobile&&sess&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,textAlign:'right'}}>
+      <span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}{sess.out?'+'+sess.out.n:''}회 · 로그</span></div>}
   </Card>;
 }
 Object.assign(window,{ConvView,ConvSession,ConvOut,ConvInConn,ConvOutConn,convVoice,CONV,CONV_THEIRS});
@@ -38668,7 +38672,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (tb_records — 없으면 예전 pms_items kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.95';
+const TB_VERSION='v10.96';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -40313,7 +40317,7 @@ function TbShell({user,role,onLogout}){
           <LiveView owner={role==='owner'} db={{notes:recs||[]}} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         {/* 대화(양방향 통역)도 숨겨 두기만 한다 */}
         <div style={{display:tab==='conv'?'block':'none'}}>
-          <ConvView setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
+          <ConvView owner={role==='owner'} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         {/* 녹취록도 숨겨 두기만 한다 — 전사·정리 중에 다른 탭을 봐도 작업 상태가 사라지지 않게 */}
         <div style={{display:tab==='rec'?'block':'none'}}>
           <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/></div>
