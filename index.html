@@ -38672,7 +38672,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (tb_records — 없으면 예전 pms_items kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.99';
+const TB_VERSION='v11.0';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39057,6 +39057,66 @@ const safeName=s=>String(s||'녹취록').replace(/[\\/:*?"<>|]+/g,' ').trim().sl
 
 /* ── 로그인 ── */
 /* ── 비밀번호 정하기 (모든 팀원) — 정해 두면 메일 없이 로그인. v8.8 ── */
+/* v11.0: 사용법 — 머리줄 「📖 사용법」 */
+const TB_GUIDE=`## 한눈에
+- **🗣 통역** — 회의·발표를 한국어 자막(왼쪽)과 요점(오른쪽)으로 실시간 통역
+- **💬 대화** — 1:1 대화. 말하는 사람이 자기 🎙 단추를 누르는 동안만 듣고, 내 말은 상대 언어 음성으로 읽어 줌
+- **📝 번역/정리** — 저장된 기록 보기, 정리하기, Word·일정으로 보내기, 녹음 파일 받아쓰기
+
+## 🗣 통역
+1. 상대 언어(중국어·영어·일본어)와 마이크를 고릅니다. 한국어를 고르면 받아쓰기·정리만 합니다.
+2. **녹음 저장**을 켜 두세요(권장). 정지하면 녹음을 처음부터 다시 받아써서 더 정확한 정리본·요약본을 만듭니다.
+3. **원문**을 체크하면 자막 아래에 원문이 작게 함께 나옵니다. 시작 전에 정하세요.
+4. **시작** → 마이크 허용. 자막은 말보다 2~3초 늦게 나옵니다.
+5. **정지** → 기록이 저장되고, 녹음이 있으면 자동으로 정리가 시작됩니다(📝 번역/정리 탭에서 진행 확인).
+
+💡 휴대폰은 자막 ↔ 요점을 **옆으로 넘겨서** 봅니다.
+
+💡 통역 중에는 다른 앱으로 넘어가지 마세요. 휴대폰은 마이크가 끊길 수 있습니다.
+
+## 소리를 잘 받으려면
+- 말하는 사람 가까이 두세요. 회의실이면 휴대폰을 테이블 가운데에.
+- 스피커·화상회의 소리를 받을 때는 음량을 크게.
+- 같은 회의를 두 기기에서 동시에 통역하면 비용이 두 배로 듭니다.
+
+## 💬 대화
+1. 상대 언어와 화면을 고릅니다 — **한 화면**(통화·옆자리) / **마주 보기**(두 사람 사이에 두면 위쪽이 상대용으로 뒤집혀 보임).
+2. **시작** 후, 말할 사람이 자기 쪽 🎙 단추를 **누른 채** 말하고 다 말하면 손을 뗍니다.
+3. 상대 말 → 한국어 자막. 내 말 → 상대 언어 자막 + 음성(끄기·속도 조절 가능).
+
+💡 PC는 스페이스 키 = 내 말 단추.
+
+💡 상대 언어 음성이 안 나오면 휴대폰 설정 › 텍스트 음성 변환(TTS)에서 그 언어 음성을 내려받으세요.
+
+## 📝 번역/정리
+- 기록을 열면 **받아쓰기 원본 / 정리본 / 요약본** 탭이 있습니다.
+  - 정리본: 조각(2분 30초)마다 말한 내용을 문장 그대로 다듬은 것
+  - 요약본: 회의록(머리 표 → 녹취 순서 회의 내용 → 시사점)
+- **✨ 정리하기**
+  - 조각별 정리부터 다시: 정리본을 다시 만들고 요약본도 새로
+  - 정리본만 다시: 정리본만 다시, 요약본은 그대로
+  - 요약본만 다시: 정리본은 두고 회의록만 새로(빠름)
+  - 처음부터 다시 받아쓰기: 녹음부터 다시(가장 오래 걸림)
+- **🎙 음성 파일 전사** — 녹음 파일을 올려 받아쓰고 정리합니다. 여러 파일은 이름 순서대로 하나의 기록으로 합칩니다. 녹음 언어를 먼저 고르세요.
+- **📄 Word** — 원본 / 정리본 / 요약본 / 요약본+정리본. 여러 기록을 골라 한 파일로 합치거나 ZIP으로 받을 수 있습니다.
+- **📅 일정으로** — 정리가 끝나면 일정관리 앱에 자동으로 보냅니다(📅 창에서 끌 수 있음).
+- **🎧 녹음과 함께 보기** — 문장을 누르면 그 부분 녹음이 재생됩니다.
+
+## 알아 둘 것
+- 녹음 파일은 서버에 올리지 않고 **이 기기**에 저장됩니다(PC는 지정 폴더, 아니면 다운로드 폴더). 다른 기기에서 다시 정리하려면 그 파일을 🎙 음성 파일 전사로 올리세요.
+- 기록은 **본인만** 볼 수 있습니다.
+- 한 번 인터넷으로 열어 둔 기기는 인터넷이 없어도 정리된 기록을 볼 수 있습니다(읽기만).
+- 기록을 지우면 녹음 파일까지 **영구 삭제**됩니다.
+- 목록이 비어 보이거나 「로그인이 풀렸습니다」가 뜨면 로그아웃 후 다시 로그인하세요. 기록은 서버에 그대로 있습니다.
+- 🔑 비밀번호를 정해 두면 메일 없이 바로 로그인할 수 있습니다.
+`;
+function TbGuideModal({open,onClose}){
+  const {Modal,Button}=window.HDWorkbookDesignSystem_ad60e4;
+  return <Modal open={open} onClose={onClose} title="📖 통번역 사용법" width={640}
+    footer={<span style={{marginLeft:'auto'}}><Button size="sm" onClick={onClose}>닫기</Button></span>}>
+    <div style={{maxHeight:'70vh',overflowY:'auto',fontSize:'var(--fs-base)',lineHeight:1.65}}><Markdown md={TB_GUIDE}/></div>
+  </Modal>;
+}
 function TbPwModal({open,onClose,toast}){
   const {Modal,Button,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
   const [a,setA]=React.useState('');const [b,setB]=React.useState('');const [busy,setBusy]=React.useState(false);const [err,setErr]=React.useState('');
@@ -40242,7 +40302,7 @@ function TbShell({user,role,onLogout}){
   const [more,setMore]=React.useState(false);   /* v10.93: 휴대폰 — 요금·설정·비밀번호·로그아웃은 ⋯ 메뉴로 */
   const [cfg,setCfg]=React.useState(()=>window.TB_CFG||{});
   const [newModels,setNewModels]=React.useState(null);
-  const [pwOpen,setPwOpen]=React.useState(false);
+  const [pwOpen,setPwOpen]=React.useState(false);const [guideOpen,setGuideOpen]=React.useState(false);
   const [newVer,setNewVer]=React.useState(null);
   React.useEffect(()=>{const on=()=>setNewVer(TbVer.latest);window.addEventListener('tb-newver',on);
     TbVer.check();const iv=setInterval(()=>TbVer.check(),10*60*1000);
@@ -40278,7 +40338,9 @@ function TbShell({user,role,onLogout}){
   </div>;
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
     <AppHeader mark="🗣" title="통번역" version={role==='owner'&&!mobile?TB_VERSION:undefined} style={mobile?{padding:'8px 12px'}:undefined} tools={mobile?<>
+      <Button variant="ghost" size="xs" onClick={()=>setGuideOpen(true)} style={{fontSize:14,padding:'2px 10px',minHeight:36}}>📖 사용법</Button>
       <Button variant="ghost" size="xs" onClick={()=>setMore(true)} aria-label="더보기" style={{fontSize:18,padding:'2px 12px',minHeight:36}}>⋯{newModels&&newModels.length?' 🆕':''}</Button></>:<>
+      <Button variant="ghost" size="xs" onClick={()=>setGuideOpen(true)} title="통번역 사용법">📖 사용법</Button>
       <TbUsageChip role={role} onOpenSettings={()=>setTab('me')}/>
       {role==='owner'&&<TbStorageChip/>}
       <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}{role==='owner'?' · 관리자':''}</span>
@@ -40293,6 +40355,7 @@ function TbShell({user,role,onLogout}){
         {[role==='owner'&&{k:'set',l:'⚙ 설정'+(newModels&&newModels.length?' 🆕':''),f:()=>setTab('me')},{k:'pw',l:'🔑 비밀번호 정하기',f:()=>setPwOpen(true)},{k:'out',l:'로그아웃',f:onLogout}].filter(Boolean).map(it=>
           <button key={it.k} type="button" onClick={()=>{setMore(false);it.f();}} style={{textAlign:'left',border:'none',borderTop:'1px solid var(--border-default)',background:'none',padding:'14px 4px',fontSize:16,fontFamily:'inherit',color:it.k==='out'?'var(--color-danger)':'var(--text-body)',cursor:'pointer'}}>{it.l}</button>)}
       </div></div>}
+    <TbGuideModal open={guideOpen} onClose={()=>setGuideOpen(false)}/>
     <TbPwModal open={pwOpen} onClose={()=>{setPwOpen(false);}} toast={m=>{toast(m);dismissPwHint();setInitPw(false);}}/>
     {!mobile&&<nav style={{display:'flex',gap:4,borderBottom:'1px solid var(--border-default)',padding:'0 16px',background:'#fff',position:'sticky',top:'env(safe-area-inset-top, 0px)',zIndex:20}}>{tabs.map(tabBtn)}</nav>}
     {/* v10.93: 휴대폰은 탭을 아래(엄지가 닿는 곳)에 */}
