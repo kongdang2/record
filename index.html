@@ -37432,14 +37432,15 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     from:calLang||Store.cfg.liveFrom||'zh',mix:false,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
   const [showZh,setShowZh]=React.useState(!!Store.cfg.liveShowZh);
   const [left,setLeft]=React.useState(Store.cfg.liveLeft==='asr'?'asr':'pv');   /* v10.87: 왼쪽 칸 = 동시통역(pv) / 받아쓰기+번역(asr) */   /* 동시통역 칸 원문 보기(v10.55) */
+  const [mid,setMid]=React.useState(!!Store.cfg.liveMid);   /* v10.89: 3분할 — 왼쪽 동시통역 · 가운데 받아쓰기+번역(숨길 수 있음) · 오른쪽 개조식 */
   const [devs,setDevs]=React.useState([]);const [adv,setAdv]=React.useState(false);const [saving,setSaving]=React.useState('');
-  const box=React.useRef(null);const stick=React.useRef(true);const box2=React.useRef(null);const stick2=React.useRef(true);
+  const box=React.useRef(null);const stick=React.useRef(true);const box2=React.useRef(null);const stick2=React.useRef(true);const box3=React.useRef(null);const stick3=React.useRef(true);
   const sess=LIVE.sess;const running=!!(sess&&sess.running);
   React.useEffect(()=>{if(LIVE.sess)LIVE.sess.onChange=force;return()=>{if(LIVE.sess)LIVE.sess.onChange=null;};},[sess]);
   React.useEffect(()=>{navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&navigator.mediaDevices.enumerateDevices()
       .then(d=>setDevs(d.filter(x=>x.kind==='audioinput'&&x.deviceId))).catch(()=>{});},[running]);
   React.useEffect(()=>{const t=running&&setInterval(force,1000);return()=>clearInterval(t);},[running]);
-  React.useEffect(()=>{const el=box.current;if(el&&stick.current)el.scrollTop=el.scrollHeight;const e2=box2.current;if(e2&&stick2.current)e2.scrollTop=e2.scrollHeight;});
+  React.useEffect(()=>{const el=box.current;if(el&&stick.current)el.scrollTop=el.scrollHeight;const e2=box2.current;if(e2&&stick2.current)e2.scrollTop=e2.scrollHeight;const e3=box3.current;if(e3&&stick3.current)e3.scrollTop=e3.scrollHeight;});
   const set=p=>setOpt(o=>({...o,...p}));
   /* 설정 화면에서 모델을 바꾸면 따라간다 */
   React.useEffect(()=>{const f=()=>setOpt(o=>({...o,model:Store.cfg.liveModel||o.model,asrModel:Store.cfg.liveAsrModel||o.asrModel,trModel:Store.cfg.liveTrModel||o.trModel}));
@@ -37521,6 +37522,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       <label style={{cursor:'pointer'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 회의록까지 만듭니다"><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
       {opt.from!=='ko'&&<label style={{whiteSpace:'nowrap'}} title="왼쪽 칸 — 동시통역: 말하는 중에 바로 번역(LiveTranslate) · 받아쓰기+번역: 문장이 끝나면 받아쓴 원문을 번역 모델로 옮김(동시통역 연결을 쓰지 않아 요금 절약). 통역 중에도 바꿀 수 있습니다">왼쪽 칸 <select value={left} onChange={e=>{const v=e.target.value;setLeft(v);Store.saveCfg({liveLeft:v});if(sess)sess.setLeft(v);}} style={{...inputStyle,width:'auto',padding:'3px 6px',fontSize:'var(--fs-sm2)'}}>
         <option value="pv">⚡ 동시통역</option><option value="asr">🎯 받아쓰기+번역</option></select></label>}
+      {opt.from!=='ko'&&left==='pv'&&<label style={{cursor:'pointer',whiteSpace:'nowrap'}} title="왼쪽 동시통역과 오른쪽 정리 사이에 받아쓰기+번역 칸을 함께 보여 줍니다(오른쪽 정리와 같은 받아쓰기·번역 결과라 요금이 더 들지 않습니다). 통역 중에도 켜고 끌 수 있습니다"><input type="checkbox" checked={mid} onChange={e=>{setMid(e.target.checked);Store.saveCfg({liveMid:e.target.checked});}}/> 가운데 칸(받아쓰기+번역)</label>}
       {opt.record&&<RecDirBtn disabled={running}/>}
       {/* 고급(서버 주소) 메뉴는 없앴다 — 기본 주소(싱가포르)만 쓴다 */}
     </div>
@@ -37534,7 +37536,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       <Button variant="gray" size="sm" onClick={()=>onOpenNote(saved.id,false)}>기록 열기</Button>
       <Button variant="ghost" size="sm" onClick={reset}>화면 비우기</Button></div>}
     {(()=>{
-      const hyb=sess&&sess.opt.mode==='hyb';const isKo=sess&&sess.opt.from==='ko';const asrLeft=hyb&&!isKo&&left==='asr';const liveSegs=hyb&&!asrLeft?sess.liveSegs:[];
+      const hyb=sess&&sess.opt.mode==='hyb';const isKo=sess&&sess.opt.from==='ko';const asrLeft=hyb&&!isKo&&left==='asr';const three=hyb&&!isKo&&!asrLeft&&mid;const liveSegs=hyb&&!asrLeft?sess.liveSegs:[];
       const boxStyle={overflowY:'auto',border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 12px',background:'#fff'};
       const h=mobile?'calc(100vh - 360px)':'calc(100vh - 380px)';
       const empty=<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>
@@ -37562,8 +37564,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
         :<>{!items.length&&empty}{items.map((it,i)=>it.para?paraRow(it.para,i,true):segRow(it.seg,i,true))}</>}
       </div>;
       if(!hyb)return verified;
-      const live=<div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?'42vh':h,minHeight:mobile?200:260}}>
-        {asrLeft&&(()=>{   /* v10.87: 받아쓰기+번역 — 문장마다 받아쓴 원문을 번역 모델로 옮긴 결과. 번역 전에는 원문을 연하게 */
+      const asrBody=()=>{   /* v10.87: 받아쓰기+번역 — 문장마다 받아쓴 원문을 번역 모델로 옮긴 결과. 번역 전에는 원문을 연하게 · v10.89: 가운데 칸도 같은 것 */
           const ss=sess.segs.filter(g=>!g.dup&&(g.zh||g.zhS||'').trim());
           if(!ss.length)return running?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>듣고 있습니다 — 문장이 끝나면 받아쓰고 번역해 보여 줍니다</div>:empty;
           const blocks=[];for(let i=0;i<ss.length;i+=4)blocks.push(ss.slice(i,i+4));
@@ -37572,7 +37573,9 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
               <div style={{fontSize:mobile?18:21,lineHeight:1.55,padding:'1px 4px',borderRadius:3,background:last&&running?'#fff7d6':'transparent',color:done?'var(--text-body)':'var(--text-label)'}}>
                 {done?g.ko:<>{g.zh}<span style={{opacity:.6}}>{g.zhS}</span>{!g.zhS&&g.zh&&<span style={{fontSize:'var(--fs-sm2)'}}> · 번역 중…</span>}</>}</div>
               {done&&showZh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',margin:'2px 4px 6px'}}>{g.zh}</div>}</div>;})}
-          </div>);})()}
+          </div>);};
+      const live=<div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?'42vh':h,minHeight:mobile?200:260}}>
+        {asrLeft&&asrBody()}
         {!asrLeft&&!liveSegs.length&&(running?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>{sess.pvState||'듣고 있습니다 — 말이 시작되면 2~3초 뒤 자막이 나옵니다'}</div>:empty)}
         {(()=>{   /* 한국어 문장 한 줄씩, 4문장마다 한 덩어리. 마지막 문장은 연한 배경(지금 들어오는 말) */
           const sents=[];liveSegs.forEach((g,gi)=>{const ss=liveSplit(g.ko+(g.koS||''));ss.forEach((t,k)=>sents.push({t,zh:k===ss.length-1&&showZh?g.zh+(g.zhS||''):''}));});
@@ -37583,11 +37586,16 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
               {x.zh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',margin:'2px 4px 6px'}}>{x.zh}</div>}</div>;})}
           </div>);})()}
       </div>;
-      return <div style={{display:'grid',gridTemplateColumns:mobile?'1fr':'minmax(0,2fr) minmax(0,1fr)',gap:10,alignItems:'start'}}>
+      const midBox=three&&<div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>🎯 받아쓰기+번역 ({modelName(opt.trModel||LIVE_TR_MODELS[0].id)})</span>
+          <span style={{cursor:'pointer'}} title="가운데 칸 숨기기" onClick={()=>{setMid(false);Store.saveCfg({liveMid:false});}}>✕ 숨기기</span></div>
+        <div ref={box3} onScroll={e=>{const el=e.currentTarget;stick3.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?'38vh':h,minHeight:mobile?180:260}}>{asrBody()}</div></div>;
+      return <div style={{display:'grid',gridTemplateColumns:mobile?'1fr':(three?'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)':'minmax(0,2fr) minmax(0,1fr)'),gap:10,alignItems:'start'}}>
         <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>{isKo?'⚡ 실시간 받아쓰기':<select value={left} aria-label="왼쪽 칸" title="동시통역: 말하는 중에 바로 번역(LiveTranslate) · 받아쓰기+번역: 문장이 끝나면 받아쓴 원문을 번역 모델로 옮김(조금 늦지만 정확, 동시통역 연결을 쓰지 않아 요금 절약)"
             onChange={e=>{const v=e.target.value;setLeft(v);Store.saveCfg({liveLeft:v});if(sess)sess.setLeft(v);}} style={{border:'none',background:'transparent',color:'inherit',font:'inherit',padding:0,cursor:'pointer'}}>
             <option value="pv">⚡ 동시통역</option><option value="asr">🎯 받아쓰기+번역 ({modelName(opt.trModel||LIVE_TR_MODELS[0].id)})</option></select>}</span>
-          {!isKo&&<label style={{cursor:'pointer'}} title="동시통역 덩어리마다 받아쓴 원문을 작게 함께 보여 줍니다"><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label>}</div>{live}</div>
+          <span style={{display:'flex',gap:10}}>{!isKo&&!asrLeft&&!mid&&<label style={{cursor:'pointer'}} title="가운데에 받아쓰기+번역 칸을 함께 보여 줍니다"><input type="checkbox" checked={false} onChange={()=>{setMid(true);Store.saveCfg({liveMid:true});}}/> 가운데 칸</label>}
+          {!isKo&&<label style={{cursor:'pointer'}} title="동시통역 덩어리마다 받아쓴 원문을 작게 함께 보여 줍니다"><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label>}</span></div>{live}</div>
+        {midBox}
         <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3}}>{isKo?'🎯 교정·정리':'🎯 검증·정리'}</div>{verified}</div>
       </div>;})()}
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
@@ -38544,7 +38552,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.88';
+const TB_VERSION='v10.89';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
