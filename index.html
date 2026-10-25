@@ -36956,6 +36956,19 @@ function pcm16b64(f32){
 const liveMerge=(have,got)=>!got?have:(!have||got.startsWith(have))?got:have+got;
 
 /* 연결 하나 = 세그먼트 목록 하나. 원문과 번역은 각자 순서대로 채운다 */
+/* v10.92: 용어 힌트에서 동시통역용 짝을 뽑는다 — 「乙烯=에틸렌」은 원문→번역 짝, 영문 약어(KPIC 등)는 그대로, 한국어만 적힌 것은 원문을 몰라 뺀다.
+   JSON 문자열(주소에 실으므로 3,000자까지) 또는 '' */
+function tbHintPhrases(hint){
+  const o={};let n=0;
+  for(const raw of String(hint==null?Store.cfg.sttHint||'':hint).split(/[,，、\n]+/)){const t=raw.trim();if(!t)continue;
+    const m=t.match(/^(.+?)\s*[=＝]\s*(.+)$/);
+    if(m){o[m[1].trim()]=m[2].trim();n++;}
+    else if(/^[A-Za-z0-9][A-Za-z0-9 .&+\-\/]*$/.test(t)){o[t]=t;n++;}}
+  if(!n)return '';
+  let j=JSON.stringify(o);
+  while(j.length>3000){const k=Object.keys(o);delete o[k[k.length-1]];j=JSON.stringify(o);}
+  return j;
+}
 class LiveConn{
   constructor(sess,n,pv){this.sess=sess;this.n=n;this.pv=!!pv;this.segs=[];this.si=0;this.ti=0;this.ready=false;this.finishing=false;this.gone=false;}
   seg(i){while(this.segs.length<=i)this.segs.push({zh:'',zhS:'',ko:'',koS:'',zhDone:false,koDone:false});
@@ -36973,7 +36986,8 @@ class LiveConn{
     const q=new URLSearchParams({jwt,mode:asr?'asr':'live',model:asr?o.asrModel:o.model,from:asr&&o.mix?o.from+',ko':o.from,to:o.from==='ko'?'en':'ko'});   /* 한국어 받아쓰기: 서버 번역은 쓰지 않으므로 to 는 형식상 */
     if(o.host)q.set('host',o.host);
     if(asr){const hot=String(Store.cfg.sttHint||'').trim();if(hot)q.set('hot',hot.slice(0,1200));}
-    else{const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);}
+    else{const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);
+      const ph=tbHintPhrases();if(ph)q.set('phr',ph);}   /* v10.92: 동시통역 용어 — 서버가 session.translation.corpus.phrases 로 넘긴다(모르는 서버는 무시) */
     if(Store.cfg.liveSil)q.set('sil',String(Store.cfg.liveSil));   /* 문장을 끊는 침묵 길이(ms) */
     if(Store.cfg.supabaseKey)q.set('apikey',Store.cfg.supabaseKey);
     const url=String(Store.cfg.supabaseUrl||'').replace(/\/+$/,'').replace(/^http/i,'ws')+'/functions/v1/livetranslate?'+q;
@@ -38541,7 +38555,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.91';
+const TB_VERSION='v10.92';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39789,7 +39803,7 @@ function TbSettings({toast,role,cfg,setCfg,newModels,setNewModels}){
     {sub==='perm'&&role==='owner'?<TbTeam toast={toast}/>:<>
     <TbModels toast={toast} role={role} cfg={cfg} setCfg={setCfg} newModels={newModels} setNewModels={setNewModels}/>
     <Card title="용어 힌트">
-      <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginBottom:6,lineHeight:1.6}}>자주 나오는 회사명·제품명·사람 이름·전문용어를 쉼표로 적어 두세요. 통역의 받아쓰기, 번역, 정리에 모두 쓰입니다. 팀 전체에 적용됩니다.</div>
+      <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginBottom:6,lineHeight:1.6}}>자주 나오는 회사명·제품명·사람 이름·전문용어를 쉼표로 적어 두세요. 통역의 받아쓰기, 번역, 정리에 모두 쓰입니다. 팀 전체에 적용됩니다. <b>동시통역</b>은 「乙烯=에틸렌」처럼 원문=번역 짝으로 적은 것과 영문 약어만 씁니다.</div>
       <textarea id="tbHint" value={hint} onChange={e=>setHint(e.target.value)} rows={3} placeholder="예: 乙烯, 丙烯, 石脑油, 温山, 대한유화" style={{...inputStyle,lineHeight:1.6}}/>
       <div style={{marginTop:8}}><Button size="sm" onClick={async()=>{const h=hint.trim();Store.saveCfg({sttHint:h});
         if(role==='owner'){try{const next={...(window.TB_CFG||cfg||{}),sttHint:h};await TB.setConfig(next);tbApplyConfig(next);setCfg(next);toast('용어 힌트를 팀 전체에 저장했습니다');}catch(e){toast('⚠ '+e.message);}}
