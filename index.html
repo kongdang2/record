@@ -38697,7 +38697,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (tb_records — 없으면 예전 pms_items kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v11.3';
+const TB_VERSION='v11.4';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39106,12 +39106,12 @@ const TB_GUIDE=[
 ];
 function TbGuideModal({open,onClose,owner,mobile}){
   const {Modal,Button}=window.HDWorkbookDesignSystem_ad60e4;
-  const F=mobile?{t:19,d:15,b:17,s:15}:{t:22,d:16,b:19,s:16};
+  const F=mobile?{t:16,d:13,b:14.5,s:13}:{t:18,d:13,b:15,s:13};   /* v11.4: v11.3 크기에서 20% 줄임(hong) */
   const line=<div style={{width:2,height:'100%',minHeight:24,background:'var(--border-strong)',margin:'0 auto'}}/>;
   const line0=<div style={{width:2,height:'100%',background:'var(--border-strong)',margin:'0 auto'}}/>;
   const arrow=<div style={{textAlign:'center',color:'var(--text-label)',fontSize:F.s+2,lineHeight:'26px'}}>↓</div>;
   const box=(st,first,grow)=>{const b=owner&&st.ob||st.b,sub=owner&&st.os||st.s;
-    return <div style={{flex:grow?1:undefined,border:st.key?'2px solid var(--wb-ink,#111827)':'1px solid var(--border-strong)',borderRadius:10,padding:'10px 14px',background:first?'var(--surface-calc-cell)':'#fff'}}>
+    return <div style={{flex:grow?1:undefined,border:st.key?'2px solid var(--wb-ink,#111827)':'1px solid var(--border-strong)',borderRadius:10,padding:'8px 11px',background:first?'var(--surface-calc-cell)':'#fff'}}>
       <div style={{fontSize:F.b,fontWeight:st.key?700:600,color:'var(--text-body)',lineHeight:1.45}}>{b}</div>
       {sub&&<div style={{fontSize:F.s,color:'var(--text-muted)',lineHeight:1.45,marginTop:3}}>{sub}</div>}
       {st.opts&&<div style={{display:'grid',gap:4,marginTop:7}}>{st.opts.map(o=><div key={o} style={{fontSize:F.s,color:'var(--text-muted)',lineHeight:1.4,paddingLeft:10,borderLeft:'2px solid var(--border-strong)'}}>{o}</div>)}</div>}
@@ -39122,13 +39122,13 @@ function TbGuideModal({open,onClose,owner,mobile}){
   const head=g=><div><div style={{fontSize:F.t,fontWeight:700,color:'var(--text-body)'}}>{g.t}</div>
     <div style={{fontSize:F.d,color:'var(--text-muted)',margin:'3px 0 10px'}}>{g.d}</div></div>;
   const rows=Math.max(...TB_GUIDE.map(g=>g.steps.length));
-  return <Modal open={open} onClose={onClose} title="📖 통번역 사용법" width={mobile?'96vw':1040}
+  return <Modal open={open} onClose={onClose} title="📖 통번역 사용법" width={mobile?'96vw':840}
     footer={<span style={{marginLeft:'auto'}}><Button size="sm" onClick={onClose}>닫기</Button></span>}>
     {mobile
       ?<div data-guide="mob" style={{maxHeight:'74vh',overflowY:'auto',display:'grid',gap:22}}>
         {TB_GUIDE.map(g=><div key={g.t}>{head(g)}
           {g.steps.filter(Boolean).map((st,i)=><React.Fragment key={i}>{i>0&&arrow}{box(st,i===0)}</React.Fragment>)}</div>)}</div>
-      :<div data-guide="desk" style={{maxHeight:'76vh',overflowY:'auto',display:'grid',gridTemplateColumns:'repeat('+TB_GUIDE.length+',1fr)',columnGap:20,alignItems:'stretch'}}>
+      :<div data-guide="desk" style={{maxHeight:'76vh',overflowY:'auto',display:'grid',gridTemplateColumns:'repeat('+TB_GUIDE.length+',1fr)',columnGap:16,alignItems:'stretch'}}>
         {TB_GUIDE.map(g=><React.Fragment key={g.t}>{head(g)}</React.Fragment>)}
         {Array.from({length:rows}).map((_,r)=>TB_GUIDE.map(g=>{const st=g.steps[r];
           return <div key={g.t+r} data-row={r} style={{display:'flex',flexDirection:'column'}}>
