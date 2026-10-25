@@ -38697,7 +38697,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (tb_records — 없으면 예전 pms_items kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v11.2';
+const TB_VERSION='v11.3';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
@@ -39083,42 +39083,59 @@ const safeName=s=>String(s||'녹취록').replace(/[\\/:*?"<>|]+/g,' ').trim().sl
 /* ── 로그인 ── */
 /* ── 비밀번호 정하기 (모든 팀원) — 정해 두면 메일 없이 로그인. v8.8 ── */
 /* v11.0: 사용법 — 머리줄 「📖 사용법」 · v11.1: 사용법은 순서도로 — 탭마다 단계 상자를 위에서 아래로. 기능이 바뀌면 같이 고친다 */
+/* v11.3: 다섯 줄 맞춤 — 3줄 = 시작·시작·정리하기, 5줄 = 정지·정지·Word. null = 그 줄은 비움(세로선만). 크기 1.5배 */
 const TB_GUIDE=[
   {t:'🗣 통역',d:'회의·발표를 실시간 한국어 자막과 요점으로',steps:[
     {b:'언어·마이크 고르기',s:'한국어를 고르면 받아쓰기·정리만'},
     {b:'녹음 저장 ✔ · 원문 선택',s:'녹음 저장을 켜 두면 정지 뒤 더 정확하게 다시 정리'},
-    {b:'● 시작',s:'마이크 허용 · 자막은 2~3초 늦게 나옴'},
+    {b:'● 시작',s:'마이크 허용 · 자막은 2~3초 늦게 나옴',key:1},
     {b:'자막(왼쪽) · 요점(오른쪽) 보기',s:'휴대폰은 옆으로 넘겨서 바꿔 보기'},
-    {b:'■ 정지',s:'기록이 저장되고 자동으로 정리 시작 → 📝 번역/정리'}]},
+    {b:'■ 정지',s:'기록이 저장됨',key:1,note:'녹음 저장을 켜둔 경우',noteS:'자동으로 다시 정리 → 📝 번역/정리'}]},
   {t:'💬 대화',d:'1:1 대화 — 단추를 누르는 동안만 듣기',steps:[
     {b:'상대 언어 · 화면 고르기',s:'한 화면(통화·옆자리) / 마주 보기(두 사람 사이에)'},
-    {b:'▶ 시작'},
-    {b:'자기 쪽 🎙 단추를 누른 채 말하기',s:'다 말하면 손 떼기'},
-    {b:'상대 말 → 한국어 자막 · 내 말 → 상대 언어 자막+음성'},
-    {b:'■ 정지',s:'기록이 저장됨 → 📝 번역/정리'}]},
+    null,
+    {b:'▶ 시작',key:1},
+    {b:'자기 쪽 🎙 단추를 누른 채 말하기',s:'다 말하면 손 떼기 · 상대 말은 한국어 자막, 내 말은 상대 언어 자막+음성'},
+    {b:'■ 정지',s:'기록이 저장됨 → 📝 번역/정리',key:1}]},
   {t:'📝 번역/정리',d:'기록 보기·다듬기·내보내기',steps:[
     {b:'기록 고르기',s:'녹음 파일이 있으면 🎙 음성 파일 전사로 올리기(여러 개는 이름 순서로 합침)'},
     {b:'받아쓰기 원본 · 정리본 · 요약본 보기'},
-    {b:'✨ 정리하기 (필요할 때)',opts:['조각별 정리부터 다시 — 정리본·요약본 모두 새로','정리본만 다시 — 요약본은 그대로','요약본만 다시 — 빠름','처음부터 다시 받아쓰기 — 가장 오래']},
-    {b:'📄 Word · 📅 일정으로 내보내기',s:'일정으로는 정리가 끝나면 자동'}]},
+    {b:'✨ 정리하기 (필요할 때)',key:1,opts:['조각별 정리부터 다시 — 정리본·요약본 모두 새로','정리본만 다시 — 요약본은 그대로','요약본만 다시 — 빠름','처음부터 다시 받아쓰기 — 가장 오래']},
+    null,
+    {b:'📄 Word',ob:'📄 Word · 📅 일정으로 내보내기',s:'',os:'일정으로는 정리가 끝나면 자동',key:1}]},
 ];
-function TbGuideModal({open,onClose}){
+function TbGuideModal({open,onClose,owner,mobile}){
   const {Modal,Button}=window.HDWorkbookDesignSystem_ad60e4;
-  const arrow=<div style={{textAlign:'center',color:'var(--text-label)',fontSize:14,lineHeight:'18px'}}>↓</div>;
-  return <Modal open={open} onClose={onClose} title="📖 통번역 사용법" width={680}
+  const F=mobile?{t:19,d:15,b:17,s:15}:{t:22,d:16,b:19,s:16};
+  const line=<div style={{width:2,height:'100%',minHeight:24,background:'var(--border-strong)',margin:'0 auto'}}/>;
+  const line0=<div style={{width:2,height:'100%',background:'var(--border-strong)',margin:'0 auto'}}/>;
+  const arrow=<div style={{textAlign:'center',color:'var(--text-label)',fontSize:F.s+2,lineHeight:'26px'}}>↓</div>;
+  const box=(st,first,grow)=>{const b=owner&&st.ob||st.b,sub=owner&&st.os||st.s;
+    return <div style={{flex:grow?1:undefined,border:st.key?'2px solid var(--wb-ink,#111827)':'1px solid var(--border-strong)',borderRadius:10,padding:'10px 14px',background:first?'var(--surface-calc-cell)':'#fff'}}>
+      <div style={{fontSize:F.b,fontWeight:st.key?700:600,color:'var(--text-body)',lineHeight:1.45}}>{b}</div>
+      {sub&&<div style={{fontSize:F.s,color:'var(--text-muted)',lineHeight:1.45,marginTop:3}}>{sub}</div>}
+      {st.opts&&<div style={{display:'grid',gap:4,marginTop:7}}>{st.opts.map(o=><div key={o} style={{fontSize:F.s,color:'var(--text-muted)',lineHeight:1.4,paddingLeft:10,borderLeft:'2px solid var(--border-strong)'}}>{o}</div>)}</div>}
+      {st.note&&<div style={{marginTop:8,paddingTop:7,borderTop:'1px dashed var(--border-strong)'}}>
+        <div style={{fontSize:F.s,fontWeight:700,color:'var(--signal,#E02424)'}}>{st.note}</div>
+        <div style={{fontSize:F.s,color:'var(--text-muted)',lineHeight:1.45}}>↳ {st.noteS}</div></div>}
+    </div>;};
+  const head=g=><div><div style={{fontSize:F.t,fontWeight:700,color:'var(--text-body)'}}>{g.t}</div>
+    <div style={{fontSize:F.d,color:'var(--text-muted)',margin:'3px 0 10px'}}>{g.d}</div></div>;
+  const rows=Math.max(...TB_GUIDE.map(g=>g.steps.length));
+  return <Modal open={open} onClose={onClose} title="📖 통번역 사용법" width={mobile?'96vw':1040}
     footer={<span style={{marginLeft:'auto'}}><Button size="sm" onClick={onClose}>닫기</Button></span>}>
-    <div style={{maxHeight:'72vh',overflowY:'auto',display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:14,alignItems:'start'}}>
-      {TB_GUIDE.map(g=><div key={g.t}>
-        <div style={{fontSize:'var(--fs-md)',fontWeight:700,color:'var(--text-body)'}}>{g.t}</div>
-        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',margin:'2px 0 8px'}}>{g.d}</div>
-        {g.steps.map((st,i)=><React.Fragment key={i}>{i>0&&arrow}
-          <div style={{border:'1px solid var(--border-strong)',borderRadius:8,padding:'7px 10px',background:i===0?'var(--surface-calc-cell)':'#fff'}}>
-            <div style={{fontSize:'var(--fs-sm2)',fontWeight:600,color:'var(--text-body)',lineHeight:1.45}}>{st.b}</div>
-            {st.s&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',lineHeight:1.45,marginTop:2}}>{st.s}</div>}
-            {st.opts&&<div style={{display:'grid',gap:3,marginTop:5}}>{st.opts.map(o=><div key={o} style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',lineHeight:1.4,paddingLeft:8,borderLeft:'2px solid var(--border-strong)'}}>{o}</div>)}</div>}
-          </div></React.Fragment>)}
-      </div>)}
-    </div>
+    {mobile
+      ?<div data-guide="mob" style={{maxHeight:'74vh',overflowY:'auto',display:'grid',gap:22}}>
+        {TB_GUIDE.map(g=><div key={g.t}>{head(g)}
+          {g.steps.filter(Boolean).map((st,i)=><React.Fragment key={i}>{i>0&&arrow}{box(st,i===0)}</React.Fragment>)}</div>)}</div>
+      :<div data-guide="desk" style={{maxHeight:'76vh',overflowY:'auto',display:'grid',gridTemplateColumns:'repeat('+TB_GUIDE.length+',1fr)',columnGap:20,alignItems:'stretch'}}>
+        {TB_GUIDE.map(g=><React.Fragment key={g.t}>{head(g)}</React.Fragment>)}
+        {Array.from({length:rows}).map((_,r)=>TB_GUIDE.map(g=>{const st=g.steps[r];
+          return <div key={g.t+r} data-row={r} style={{display:'flex',flexDirection:'column'}}>
+            {r>0&&(st?arrow:null)}
+            {st?box(st,r===0):<div style={{flex:1,display:'flex'}}>{line}</div>}
+            {st&&r<rows-1&&<div style={{flex:1,display:'flex'}}>{line0}</div>}</div>;}))}
+      </div>}
   </Modal>;
 }
 function TbPwModal({open,onClose,toast}){
@@ -39420,7 +39437,7 @@ function tbFindEvent(evs,rec){
 async function tbAutoCal(rec,toast,upd,opt){
   opt=opt||{};
   if(rec.cal&&rec.cal.ev)return tbCalExport(rec,toast);
-  if(Store.mode!=='supabase')return false;
+  if(Store.mode!=='supabase'||window.TB_ROLE!=='owner')return false;   /* v11.3: 팀원은 일정 자동 내보내기 없음 */
   if(!opt.force&&Store.cfg.tbAutoCal===false)return false;   /* v10.79: 올린 음성 파일도 자동 — 날짜는 올린 날(hong) */
   const evs=opt.evs||await CAL.list();
   let ev=tbFindEvent(evs,rec);const isNew=!ev;if(!ev){ev=tbNewEvent(rec,localDay(rec.created));evs.push(ev);}
@@ -39494,7 +39511,7 @@ function TbExportDlg({rec,recs,onClose,toast,upd}){
       <div style={{display:'flex',justifyContent:'flex-end',marginTop:10}}><Button variant="ghost" size="sm" onClick={onClose}>{busy?'넣는 중…':'닫기'}</Button></div>
     </div></div>,document.body);
 }
-function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,clearAuto}){
+function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,clearAuto,owner}){   /* v11.3: 📅 일정 내보내기는 관리자만 */
   const {Card,Button,Badge,InfoBar,Modal}=window.HDWorkbookDesignSystem_ad60e4;
   const [langOpen,setLangOpen]=React.useState(false);const upLang=React.useRef(null);
   React.useEffect(()=>{if(TB_EMBED&&TB_LINK&&TB_LINK.file)setLangOpen(true);},[]);   /* 일정앱 상자 안 「음성 파일로 전사」 — 열리자마자 언어 고르기부터 */
@@ -39742,7 +39759,7 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
               try{await removeMany([...pick].filter(id=>recs.some(r=>r.id===id)));setPick(new Set());setAskMany(false);}catch(_){}setDelBusy(false);}}>{delBusy?'삭제 중…':'삭제'}</Button>
             <Button variant="ghost" size="sm" disabled={delBusy} onClick={()=>setAskMany(false)}>취소</Button></span>
           :<><Button variant="secondary" size="sm" onClick={()=>setDocMany(true)} title="고른 기록을 Word로 한 번에 — 한 파일로 합치거나 파일마다 따로(ZIP)">📄 Word</Button>
-            <Button variant="secondary" size="sm" disabled={Store.mode!=='supabase'} onClick={()=>setCalMany(true)} title="고른 기록을 일정관리 앱 일정에 넣습니다 — 각자 날짜로, 또는 한 일정에 모두">📅 일정으로</Button>
+            {owner&&<Button variant="secondary" size="sm" disabled={Store.mode!=='supabase'} onClick={()=>setCalMany(true)} title="고른 기록을 일정관리 앱 일정에 넣습니다 — 각자 날짜로, 또는 한 일정에 모두">📅 일정으로</Button>}
             <Button variant="danger" size="sm" onClick={()=>setAskMany(true)}>🗑 선택 삭제</Button>
             <Button variant="ghost" size="sm" onClick={()=>setPick(new Set())}>선택 해제</Button></>)}
       </div>}
@@ -39775,9 +39792,9 @@ function TbRecords({recs,sel,setSel,upd,remove,removeMany,addRec,toast,autoStt,c
         <Button size="sm" disabled={!!busy||!(hasAudio||hasRaw)} onClick={()=>hasRaw?setTidyOpen(true):runTidy(cur)}
           title={'받아쓰기 '+tbSttName(Store.cfg.tbSttModel)+' · 정리 '+modelName(Store.cfg.claudeModel||CLAUDE_MODELS[0].id)+' — '+(tbSection(cur.md,'녹취')?'받아쓴 글로 회의록(개요·주제별 정리)·한국어 번역·정리된 원문을 다시 만듭니다':'녹음을 처음부터 받아쓰고 이어서 한국어 번역과 회의록(개요·주제별 정리)을 만듭니다. 결과는 맨 위에 붙습니다')}>✨ 정리하기</Button>
         <Button variant="secondary" size="sm" disabled={!!busy} onClick={()=>setDocOpen(true)} title="이 기록을 Word 문서로 내려받습니다 — 받아쓰기 원본·정리본·요약본을 따로 고를 수 있습니다">📄 Word</Button>
-        <Button variant="secondary" size="sm" disabled={!!busy||Store.mode!=='supabase'} onClick={()=>cur.cal?tbCalExport(cur,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message)):setToCal(true)}
-          title={cur.cal?'연결된 일정 『'+(cur.cal.title||'')+'』('+(cur.cal.date||'')+')의 메모에 바로 넣습니다':'정리된 내용을 일정관리 앱의 그날 일정 본문(메모)에 넣습니다'}>📅 {cur.cal?'일정에 넣기':'일정으로'}</Button>
-        {cur.cal&&<Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setToCal(true)} title="연결된 일정 말고 다른 일정을 골라 넣습니다">다른 일정…</Button>}
+        {owner&&<Button variant="secondary" size="sm" disabled={!!busy||Store.mode!=='supabase'} onClick={()=>cur.cal?tbCalExport(cur,toast).catch(e=>toast('⚠ 일정에 넣기 실패 — '+e.message)):setToCal(true)}
+          title={cur.cal?'연결된 일정 『'+(cur.cal.title||'')+'』('+(cur.cal.date||'')+')의 메모에 바로 넣습니다':'정리된 내용을 일정관리 앱의 그날 일정 본문(메모)에 넣습니다'}>📅 {cur.cal?'일정에 넣기':'일정으로'}</Button>}
+        {owner&&cur.cal&&<Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setToCal(true)} title="연결된 일정 말고 다른 일정을 골라 넣습니다">다른 일정…</Button>}
         {toCal&&<TbExportDlg rec={cur} toast={toast} upd={upd} onClose={()=>setToCal(false)}/>}
         <Button variant="ghost" size="sm" disabled={!!busy} onClick={()=>setEdit(!edit)}>{edit?'✓ 편집 끝':'✎ 편집'}</Button>
         {confirmDel
@@ -40307,6 +40324,7 @@ function TbShell({user,role,onLogout}){
   const [cfg,setCfg]=React.useState(()=>window.TB_CFG||{});
   const [newModels,setNewModels]=React.useState(null);
   const [pwOpen,setPwOpen]=React.useState(false);const [guideOpen,setGuideOpen]=React.useState(false);
+  window.TB_ROLE=role;
   const [newVer,setNewVer]=React.useState(null);
   React.useEffect(()=>{const on=()=>setNewVer(TbVer.latest);window.addEventListener('tb-newver',on);
     TbVer.check();const iv=setInterval(()=>TbVer.check(),10*60*1000);
@@ -40335,7 +40353,7 @@ function TbShell({user,role,onLogout}){
         <div style={{display:tab==='live'?'block':'none'}}>
           <LiveView owner={role==='owner'} db={{notes:recs||[]}} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         <div style={{display:tab==='rec'?'block':'none'}}>
-          <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/></div>
+          <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)} owner={role==='owner'}/></div>
       </>}
     </main>
     <Toast open={!!toastMsg}>{toastMsg}</Toast>
@@ -40359,7 +40377,7 @@ function TbShell({user,role,onLogout}){
         {[role==='owner'&&{k:'set',l:'⚙ 설정'+(newModels&&newModels.length?' 🆕':''),f:()=>setTab('me')},{k:'pw',l:'🔑 비밀번호 정하기',f:()=>setPwOpen(true)},{k:'out',l:'로그아웃',f:onLogout}].filter(Boolean).map(it=>
           <button key={it.k} type="button" onClick={()=>{setMore(false);it.f();}} style={{textAlign:'left',border:'none',borderTop:'1px solid var(--border-default)',background:'none',padding:'14px 4px',fontSize:16,fontFamily:'inherit',color:it.k==='out'?'var(--color-danger)':'var(--text-body)',cursor:'pointer'}}>{it.l}</button>)}
       </div></div>}
-    <TbGuideModal open={guideOpen} onClose={()=>setGuideOpen(false)}/>
+    <TbGuideModal open={guideOpen} onClose={()=>setGuideOpen(false)} owner={role==='owner'} mobile={mobile}/>
     <TbPwModal open={pwOpen} onClose={()=>{setPwOpen(false);}} toast={m=>{toast(m);dismissPwHint();setInitPw(false);}}/>
     {!mobile&&<nav style={{display:'flex',gap:4,borderBottom:'1px solid var(--border-default)',padding:'0 16px',background:'#fff',position:'sticky',top:'env(safe-area-inset-top, 0px)',zIndex:20}}>{tabs.map(tabBtn)}</nav>}
     {/* v10.93: 휴대폰은 탭을 아래(엄지가 닿는 곳)에 */}
@@ -40393,7 +40411,7 @@ function TbShell({user,role,onLogout}){
           <ConvView owner={role==='owner'} setDb={setDbShim} toast={toast} onOpenNote={(id,stt)=>{setSel(id);setTab('rec');if(stt)setAutoStt(id);}}/></div>
         {/* 녹취록도 숨겨 두기만 한다 — 전사·정리 중에 다른 탭을 봐도 작업 상태가 사라지지 않게 */}
         <div style={{display:tab==='rec'?'block':'none'}}>
-          <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)}/></div>
+          <TbRecords recs={recs||[]} sel={sel} setSel={setSel} upd={upd} remove={remove} removeMany={removeMany} addRec={addRec} toast={toast} autoStt={autoStt} clearAuto={()=>setAutoStt(null)} owner={role==='owner'}/></div>
         {tab==='me'&&role==='owner'&&<TbSettings toast={toast} role={role} cfg={cfg} setCfg={setCfg} newModels={newModels} setNewModels={setNewModels}/>}
       </>}
     </main>
