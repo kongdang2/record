@@ -37538,16 +37538,17 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     </div>
     {mobile&&<div style={{display:'grid',gap:6,margin:'4px 0 8px'}}>
       <Button onClick={()=>start()} disabled={!!saving} style={{width:'100%',minHeight:50,fontSize:17,borderRadius:12}}>● {sess?'새로 시작':'통역 시작'}</Button>
-      {(owner||(sess&&!saving&&!saved))&&<div style={{display:'flex',gap:6,justifyContent:'center'}}>
-        {owner&&<Button variant="gray" size="sm" disabled={!!saving} onClick={()=>fileIn.current&&fileIn.current.click()}>📂 파일로 시험</Button>}
-        {sess&&!saving&&!saved&&<Button variant="ghost" size="sm" onClick={reset}>화면 비우기</Button>}</div>}</div>}
+      {sess&&!saving&&!saved&&<div style={{display:'flex',gap:6,justifyContent:'center'}}>   {/* v10.94: 휴대폰에는 파일로 시험 없음 */}
+        {<Button variant="ghost" size="sm" onClick={reset}>화면 비우기</Button>}</div>}</div>}
     {/* v10.93: 모델·녹음 옵션은 접어 두고 한 줄 요약만 */}
-    <button type="button" onClick={()=>setOptOpen(v=>!v)} aria-expanded={optOpen} style={{border:'none',background:'none',padding:'2px 0',marginBottom:6,fontFamily:'inherit',fontSize:'var(--fs-sm2)',color:'var(--text-muted)',cursor:'pointer',textAlign:'left'}}>
-      ⚙ {opt.record?'녹음 저장 켜짐':'녹음 안 함'} · {modelName(opt.model)} <span style={{color:'var(--text-label)'}}>{optOpen?'▴ 접기':'▾ 옵션'}</span></button>
+    <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:'6px 14px',marginBottom:6,fontSize:'var(--fs-sm2)'}}>
+      {/* v10.94: 녹음 저장은 중요하니 접지 않는다 */}
+      <label style={{cursor:'pointer',fontWeight:600,color:'var(--text-body)',whiteSpace:'nowrap'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 회의록까지 만듭니다"><input type="checkbox" checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
+      {opt.record&&<RecDirBtn disabled={running}/>}
+      <button type="button" onClick={()=>setOptOpen(v=>!v)} aria-expanded={optOpen} style={{border:'none',background:'none',padding:'2px 0',fontFamily:'inherit',fontSize:'var(--fs-sm2)',color:'var(--text-muted)',cursor:'pointer',textAlign:'left'}}>
+        ⚙ {modelName(opt.model)} <span style={{color:'var(--text-label)'}}>{optOpen?'▴ 접기':'▾ 모델'}</span></button></div>
     {optOpen&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:8,display:'flex',flexWrap:'wrap',gap:'6px 12px',alignItems:'center',padding:'8px 10px',background:'var(--surface-calc-cell)',borderRadius:6}}>
       <span style={{color:'var(--text-label)'}}>모델: {opt.mode==='live'?modelName(opt.model):modelName(opt.asrModel)+' + '+modelName(opt.trModel)+(opt.mode==='hyb'&&left!=='asr'?' · 동시통역 '+modelName(opt.model):'')}</span>
-      <label style={{cursor:'pointer'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 회의록까지 만듭니다"><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
-            {opt.record&&<RecDirBtn disabled={running}/>}
       {/* 고급(서버 주소) 메뉴는 없앴다 — 기본 주소(싱가포르)만 쓴다 */}
     </div>}
     </>}
@@ -38602,7 +38603,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.93';
+const TB_VERSION='v10.94';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
