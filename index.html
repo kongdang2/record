@@ -37067,7 +37067,7 @@ class LiveSession{
     try{if(navigator.wakeLock)this.lock=await navigator.wakeLock.request('screen');}catch(_){}
     try{KeepAwake.hold(this);}catch(_){}
     await this.connect();
-    this.noPv=Store.cfg.liveLeft==='asr';   /* v10.87: 왼쪽 칸을 받아쓰기+번역으로 보면 동시통역 연결은 열지 않는다(요금 절약) */
+    this.noPv=false;   /* v10.90: 왼쪽 칸 선택을 없앴다 — 왼쪽은 항상 동시통역 */   /* v10.87: 왼쪽 칸을 받아쓰기+번역으로 보면 동시통역 연결은 열지 않는다(요금 절약) */
     if(this.opt.mode==='hyb'&&this.opt.from!=='ko'&&!this.noPv)this.connectPv();   /* 미리보기 줄용 동시통역 연결(v10.45) · 한국어는 받아쓰기 흐름이 곧 왼쪽 자막(v10.61) */
     this.rot=setInterval(()=>this.rotate(),1000);   /* 교대는 때가 되면 문장 사이에서(rotate) */
   }
@@ -37431,7 +37431,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,
     from:calLang||Store.cfg.liveFrom||'zh',mix:false,host:'',clean:false,record:Store.cfg.liveRecord!==false,device:''}));
   const [showZh,setShowZh]=React.useState(!!Store.cfg.liveShowZh);
-  const [left,setLeft]=React.useState(Store.cfg.liveLeft==='asr'?'asr':'pv');   /* v10.87: 왼쪽 칸 = 동시통역(pv) / 받아쓰기+번역(asr) */   /* 동시통역 칸 원문 보기(v10.55) */
+  const left='pv';   /* v10.90: 왼쪽은 항상 동시통역(선택 없앰) */   /* 동시통역 칸 원문 보기(v10.55) */
   const [mid,setMid]=React.useState(!!Store.cfg.liveMid);   /* v10.89: 3분할 — 왼쪽 동시통역 · 가운데 받아쓰기+번역(숨길 수 있음) · 오른쪽 개조식 */
   const [devs,setDevs]=React.useState([]);const [adv,setAdv]=React.useState(false);const [saving,setSaving]=React.useState('');
   const box=React.useRef(null);const stick=React.useRef(true);const box2=React.useRef(null);const stick2=React.useRef(true);const box3=React.useRef(null);const stick3=React.useRef(true);
@@ -37520,9 +37520,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6,display:'flex',flexWrap:'wrap',gap:'4px 12px',alignItems:'center'}}>
       <span style={{color:'var(--text-label)'}}>모델: {opt.mode==='live'?modelName(opt.model):modelName(opt.asrModel)+' + '+modelName(opt.trModel)+(opt.mode==='hyb'&&left!=='asr'?' · 동시통역 '+modelName(opt.model):'')}</span>
       <label style={{cursor:'pointer'}} title="녹음은 서버에 올리지 않고 이 기기에 파일로 저장합니다. 정지하면 녹음을 다시 받아써서 회의록까지 만듭니다"><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음 저장</label>
-      {opt.from!=='ko'&&<label style={{whiteSpace:'nowrap'}} title="왼쪽 칸 — 동시통역: 말하는 중에 바로 번역(LiveTranslate) · 받아쓰기+번역: 문장이 끝나면 받아쓴 원문을 번역 모델로 옮김(동시통역 연결을 쓰지 않아 요금 절약). 통역 중에도 바꿀 수 있습니다">왼쪽 칸 <select value={left} onChange={e=>{const v=e.target.value;setLeft(v);Store.saveCfg({liveLeft:v});if(sess)sess.setLeft(v);}} style={{...inputStyle,width:'auto',padding:'3px 6px',fontSize:'var(--fs-sm2)'}}>
-        <option value="pv">⚡ 동시통역</option><option value="asr">🎯 받아쓰기+번역</option></select></label>}
-      {opt.from!=='ko'&&left==='pv'&&<label style={{cursor:'pointer',whiteSpace:'nowrap'}} title="왼쪽 동시통역과 오른쪽 정리 사이에 받아쓰기+번역 칸을 함께 보여 줍니다(오른쪽 정리와 같은 받아쓰기·번역 결과라 요금이 더 들지 않습니다). 통역 중에도 켜고 끌 수 있습니다"><input type="checkbox" checked={mid} onChange={e=>{setMid(e.target.checked);Store.saveCfg({liveMid:e.target.checked});}}/> 가운데 칸(받아쓰기+번역)</label>}
+            {opt.from!=='ko'&&left==='pv'&&<label style={{cursor:'pointer',whiteSpace:'nowrap'}} title="왼쪽 동시통역과 오른쪽 정리 사이에 받아쓰기+번역 칸을 함께 보여 줍니다(오른쪽 정리와 같은 받아쓰기·번역 결과라 요금이 더 들지 않습니다). 통역 중에도 켜고 끌 수 있습니다"><input type="checkbox" checked={mid} onChange={e=>{setMid(e.target.checked);Store.saveCfg({liveMid:e.target.checked});}}/> 가운데 칸(받아쓰기+번역)</label>}
       {opt.record&&<RecDirBtn disabled={running}/>}
       {/* 고급(서버 주소) 메뉴는 없앴다 — 기본 주소(싱가포르)만 쓴다 */}
     </div>
@@ -37590,9 +37588,7 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
           <span style={{cursor:'pointer'}} title="가운데 칸 숨기기" onClick={()=>{setMid(false);Store.saveCfg({liveMid:false});}}>✕ 숨기기</span></div>
         <div ref={box3} onScroll={e=>{const el=e.currentTarget;stick3.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?'38vh':h,minHeight:mobile?180:260}}>{asrBody()}</div></div>;
       return <div style={{display:'grid',gridTemplateColumns:mobile?'1fr':(three?'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)':'minmax(0,2fr) minmax(0,1fr)'),gap:10,alignItems:'start'}}>
-        <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>{isKo?'⚡ 실시간 받아쓰기':<select value={left} aria-label="왼쪽 칸" title="동시통역: 말하는 중에 바로 번역(LiveTranslate) · 받아쓰기+번역: 문장이 끝나면 받아쓴 원문을 번역 모델로 옮김(조금 늦지만 정확, 동시통역 연결을 쓰지 않아 요금 절약)"
-            onChange={e=>{const v=e.target.value;setLeft(v);Store.saveCfg({liveLeft:v});if(sess)sess.setLeft(v);}} style={{border:'none',background:'transparent',color:'inherit',font:'inherit',padding:0,cursor:'pointer'}}>
-            <option value="pv">⚡ 동시통역</option><option value="asr">🎯 받아쓰기+번역 ({modelName(opt.trModel||LIVE_TR_MODELS[0].id)})</option></select>}</span>
+        <div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>{isKo?'⚡ 실시간 받아쓰기':'⚡ 동시통역'}</span>
           <span style={{display:'flex',gap:10}}>{!isKo&&!asrLeft&&!mid&&<label style={{cursor:'pointer'}} title="가운데에 받아쓰기+번역 칸을 함께 보여 줍니다"><input type="checkbox" checked={false} onChange={()=>{setMid(true);Store.saveCfg({liveMid:true});}}/> 가운데 칸</label>}
           {!isKo&&<label style={{cursor:'pointer'}} title="동시통역 덩어리마다 받아쓴 원문을 작게 함께 보여 줍니다"><input type="checkbox" checked={showZh} onChange={e=>{setShowZh(e.target.checked);Store.saveCfg({liveShowZh:e.target.checked});}}/> 원문</label>}</span></div>{live}</div>
         {midBox}
@@ -38552,7 +38548,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (pms_items, kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v10.89';
+const TB_VERSION='v10.90';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
