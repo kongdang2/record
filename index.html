@@ -10,7 +10,7 @@
 <script>/* v10.74: 오프라인 열람 — 앱 파일을 기기에 저장(sw.js) */
 if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost'))addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(e=>console.warn('[오프라인] 등록 실패',e)));</script>
 <title>통번역</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&family=Roboto+Condensed:wght@400;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&family=Roboto+Condensed:wght@400;700&display=swap" rel="stylesheet">
 <style>/* 배포 가능한 무료 폰트(OFL). 원본 시스템 폰트(맑은 고딕·Arial Narrow)는 로컬 폴백으로만 유지. */
 :root{
 /* ── Theme (원본 --theme-*) : 브랜드 블루 계열 ── */
@@ -35641,6 +35641,26 @@ __ds_ns.DataTable = __ds_scope.DataTable;
 </script>
 <script src="pms.config.js"></script>
 <style id="pms-responsive">
+/* v11.2 디자인 1안 「잉크와 신호」 — 흰 바탕·먹색 글씨, 빨강은 통역·녹음 중에만 */
+:root{
+  --font-sans:"IBM Plex Sans KR","Noto Sans KR","Malgun Gothic","맑은 고딕",sans-serif;
+  --wb-ink:#111827;--wb-ink-2:#4B5563;--wb-ink-3:#8A93A0;
+  --wb-paper-2:#F6F7F9;--wb-paper-3:#EEF0F3;--wb-paper-4:#E5E7EB;--wb-paper-5:#FAFAFB;
+  --wb-line:#E5E7EB;--wb-line-strong:#D1D5DB;--wb-line-dashed:#D1D5DB;
+  --wb-ink-a06:rgba(17,24,39,.05);--wb-ink-a08:rgba(17,24,39,.08);
+  --wb-blue-25:#F6F7F9;--wb-blue-50:#F1F3F6;--wb-blue-900:#1E3A5F;--wb-blue-600:#2F5A85;
+  --wb-red-600:#E02424;--wb-red-50:#FDECEC;
+  --signal:#E02424;--signal-soft:#FDECEC;--wait:#B45309;--wait-soft:#FEF3C7;--busy:#1D4ED8;--busy-soft:#E0E7FF;
+  --btn-primary-bg:#111827;
+}
+@keyframes tbPulse{0%{box-shadow:0 0 0 0 rgba(224,36,36,.45)}70%{box-shadow:0 0 0 7px rgba(224,36,36,0)}100%{box-shadow:0 0 0 0 rgba(224,36,36,0)}}
+.tbPill{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:700;padding:4px 11px;border-radius:999px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.tbPill i{width:8px;height:8px;border-radius:50%;display:inline-block;background:currentColor}
+.tbPill.live{background:var(--signal-soft);color:var(--signal)}.tbPill.live i{animation:tbPulse 1.6s infinite}
+.tbPill.wait{background:var(--wait-soft);color:var(--wait)}
+.tbPill.busy{background:var(--busy-soft);color:var(--busy)}
+.tbPill.idle{background:var(--wb-paper-3);color:var(--wb-ink-2)}
+@media (prefers-reduced-motion:reduce){.tbPill.live i{animation:none}}
 .tbSwipe::-webkit-scrollbar{display:none}
 /* 폰: 모달·카드가 화면을 넘지 않게 */
 @media (max-width:860px){
@@ -37506,6 +37526,8 @@ class LiveSession{
 /* 화면을 옮겨도(번역/정리 확인 등) 통역이 끊기지 않도록 세션은 화면 밖에 둔다 */
 const LIVE={sess:null,saved:null,cal:TB_LINK&&TB_LINK.ev?TB_LINK:null};   /* cal: 일정앱에서 연결해 온 일정 — 녹취가 끝나면 거기에 넣는다 */
 
+/* v11.2: 상태 배지 — 통역·녹음 중은 빨강(깜빡임), 연결 중은 호박색, 정리 중은 파랑, 대기는 회색 */
+function TbStatus({kind,children}){return <span className={'tbPill '+(kind||'idle')} role="status">{kind!=='idle'&&<i/>}{children}</span>;}
 /* v10.96: 휴대폰 — 시작·정지 단추를 아래 탭 바로 위에 크게 한 줄로 고정 */
 function MobRunBar({children,h}){
   return <><div style={{height:h||72}}/><div style={{position:'fixed',left:0,right:0,bottom:'calc(58px + env(safe-area-inset-bottom, 0px))',zIndex:35,display:'grid',gap:8,
@@ -37590,13 +37612,15 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
       ?<Button variant="danger" onClick={stop}>■ 정지</Button>
       :<span style={{display:'inline-flex',gap:6}}><Button onClick={()=>start()} disabled={!!saving}>● {sess?'새로 시작':'시작'}</Button>
         {owner&&<><Button variant="gray" disabled={!!saving} onClick={()=>fileIn.current&&fileIn.current.click()} title="관리자 시험용 — 마이크 대신 녹음 파일을 실제 속도로 넣어 같은 소리로 방식을 비교합니다(비용은 실제 통역과 같음)">📂 파일로 시험</Button></>}</span>;   /* v10.96: 대기 중 「화면 비우기」는 뺐다 — 멈추면 저장 띠에 있다 */
-  const main=<Card title="🗣 통역" badge={<Badge tone="muted">{status}</Badge>}
+  const stKind=saving?'busy':!sess||!sess.running?'idle':(sess.active&&sess.active.ready?'live':'wait');
+  const stText=saving?'정리 중':sess&&sess.running?(status+(sess.opt.record!==false?' · 녹음':'')+' '+mmss(secs)):status;
+  const main=<Card title="🗣 통역" badge={<TbStatus kind={stKind}>{stText}</TbStatus>}
     toolbar={mobile?null:runBtn}
     toolbarRight={<span style={{display:'inline-flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)'}}>
       <span title="입력 소리 크기 — 말할 때 막대가 움직여야 합니다" style={{width:70,height:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-default)',borderRadius:4,overflow:'hidden'}}>
         <span style={{display:'block',height:'100%',width:(lvl*100)+'%',background:lvl>0.9?'var(--color-danger)':'#16a34a',transition:'width .1s'}}/></span>
       <span style={{fontFamily:'var(--font-num)'}}>{mmss(secs)}{sess&&sess.opt.file&&sess.fileLen?' / '+mmss(Math.round(sess.fileLen))+' 📂':''}</span>
-      {sess&&sess.opt.record!==false&&running&&<span style={{color:'var(--color-danger)'}}>● 녹음</span>}</span>}>
+</span>}>
     {owner&&<input id="tbLiveFileIn" ref={fileIn} type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.ogg" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(f)start(f);}}/>}
     {!running&&<>
     <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6}}>
@@ -37663,19 +37687,19 @@ function LiveView({db,setDb,toast,onOpenNote,owner}){
           const blocks=[];for(let i=0;i<ss.length;i+=4)blocks.push(ss.slice(i,i+4));
           return blocks.map((bl,bi)=><div key={bi} style={{padding:'8px 0',borderBottom:'1px dashed var(--border-default)'}}>
             {bl.map((g,k)=>{const last=bi===blocks.length-1&&k===bl.length-1;const done=g.koDone&&(g.ko||'').trim();return <div key={k}>
-              <div style={{fontSize:mobile?18:21,lineHeight:1.55,padding:'1px 4px',borderRadius:3,background:last&&running?'#fff7d6':'transparent',color:done?'var(--text-body)':'var(--text-label)'}}>
+              <div style={{fontSize:mobile?18:21,lineHeight:1.55,padding:'1px 4px 1px 9px',borderLeft:'3px solid '+(last&&running?'var(--signal)':'transparent'),fontWeight:last&&running?600:400,color:!done?'var(--text-label)':running&&!last?'var(--text-muted)':'var(--text-body)'}}>
                 {done?g.ko:<>{g.zh}<span style={{opacity:.6}}>{g.zhS}</span>{!g.zhS&&g.zh&&<span style={{fontSize:'var(--fs-sm2)'}}> · 번역 중…</span>}</>}</div>
               {done&&showZh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',margin:'2px 4px 6px'}}>{g.zh}</div>}</div>;})}
           </div>);};
       const live=<div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}} style={{...boxStyle,height:mobile?mh:h,minHeight:mobile?240:260}}>
         {asrLeft&&asrBody()}
         {!asrLeft&&!liveSegs.length&&(running?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>{sess.pvState||'듣고 있습니다 — 말이 시작되면 2~3초 뒤 자막이 나옵니다'}</div>:empty)}
-        {(()=>{   /* 한국어 문장 한 줄씩, 4문장마다 한 덩어리. 마지막 문장은 연한 배경(지금 들어오는 말) */
+        {(()=>{   /* 한국어 문장 한 줄씩, 4문장마다 한 덩어리. 마지막 문장은 빨간 세로줄+진하게(지금 들어오는 말), 지난 문장은 연하게 */
           const sents=[];liveSegs.forEach((g,gi)=>{const ss=liveSplit(g.ko+(g.koS||''));ss.forEach((t,k)=>sents.push({t,zh:k===ss.length-1&&showZh?g.zh+(g.zhS||''):''}));});
           const blocks=[];for(let i=0;i<sents.length;i+=4)blocks.push(sents.slice(i,i+4));
           return blocks.map((bl,bi)=><div key={bi} style={{padding:'8px 0',borderBottom:'1px dashed var(--border-default)'}}>
             {bl.map((x,k)=>{const last=bi===blocks.length-1&&k===bl.length-1;return <div key={k}>
-              <div style={{fontSize:mobile?18:21,lineHeight:1.55,color:'var(--text-body)',padding:'1px 4px',borderRadius:3,background:last&&running?'#fff7d6':'transparent'}}>{x.t}</div>
+              <div style={{fontSize:mobile?18:21,lineHeight:1.55,padding:'1px 4px 1px 9px',borderLeft:'3px solid '+(last&&running?'var(--signal)':'transparent'),fontWeight:last&&running?600:400,color:running&&!last?'var(--text-muted)':'var(--text-body)'}}>{x.t}</div>
               {x.zh&&<div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',margin:'2px 4px 6px'}}>{x.zh}</div>}</div>;})}
           </div>);})()}
       </div>;
@@ -38047,7 +38071,8 @@ function ConvView({setDb,toast,onOpenNote,owner}){
   const liveMode='⚡ 동시통역 ('+modelName(Store.cfg.liveModel||LIVE_MODELS[0].id)+')';
   /* 🎙 단추가 화면 안에 보이도록 말풍선 영역을 그만큼 낮춘다 */
   const H=mobile?(running?'calc(100vh - 390px)':'calc(100vh - 430px)'):'calc(100vh - 420px)';
-  return <Card title="💬 대화" badge={<Badge tone="muted">{status}</Badge>}
+  const stKind=saving?'busy':!sess||!sess.running?'idle':!(sess.active&&sess.active.ready)?'wait':(sess.held||sess.themHeld)?'live':'idle';
+  return <Card title="💬 대화" badge={<TbStatus kind={stKind}>{saving?'정리 중':status}</TbStatus>}
     toolbar={mobile?null:runBtn}
     toolbarRight={<span style={{display:'inline-flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)'}}>
       <span title="입력 소리 크기" style={{width:60,height:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-default)',borderRadius:4,overflow:'hidden'}}>
@@ -38672,7 +38697,7 @@ Object.assign(window,{zipMake,safeName,crc32});
    · 기록: 각자 자기 것만 (tb_records — 없으면 예전 pms_items kind='tbrec', RLS가 사람별로 나눈다)
    · 사용량: 통역은 Edge Function이 서버에서, 전사·정리는 앱이 tb_usage 에 남긴다. 한도는 없다
    · 팀 관리(소유자만): Edge Function 'tb-admin' 이 명단 추가·삭제·로그인 링크·사용량을 맡는다 */
-const TB_VERSION='v11.1';
+const TB_VERSION='v11.2';
 /* 새 버전 확인 — 배포 때 version.json 도 같이 올린다. 열어 둔 창이 구버전이면 새로고침을 권하고, 구버전으로 통역을 새로 시작하지는 못하게 한다 */
 const tbVerNum=v=>String(v||'').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
 const tbVerNewer=(a,b)=>{const x=tbVerNum(a),y=tbVerNum(b);for(let i=0;i<Math.max(x.length,y.length);i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)>(y[i]||0);}return false;};
